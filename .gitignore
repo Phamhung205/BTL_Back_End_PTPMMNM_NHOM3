@@ -1,0 +1,9 @@
+bin/
+obj/
+.vs/
+.vscode/
+.env
+*.user
+*.suo
+storage/releases/*
+!storage/releases/.gitkeep

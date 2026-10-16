@@ -1,0 +1,77 @@
+@host = http://localhost:5088
+@token = PASTE_JWT_HERE
+
+### Health
+GET {{host}}/health
+
+### Register
+POST {{host}}/api/auth/register
+Content-Type: application/json
+
+{
+  "email": "hung@example.com",
+  "displayName": "Hung",
+  "password": "123456"
+}
+
+### Login
+POST {{host}}/api/auth/login
+Content-Type: application/json
+
+{
+  "email": "hung@example.com",
+  "password": "123456"
+}
+
+### Create project
+POST {{host}}/api/projects
+Authorization: Bearer {{token}}
+Content-Type: application/json
+
+{
+  "name": "PNH EFOOTBALL Demo",
+  "slug": "pnh-efootball-demo",
+  "sourceLocaleCode": "vi"
+}
+
+### Attach English
+POST {{host}}/api/projects/1/locales
+Authorization: Bearer {{token}}
+Content-Type: application/json
+
+{ "localeCode": "en" }
+
+### Import nested source JSON
+POST {{host}}/api/projects/1/source-versions/import
+Authorization: Bearer {{token}}
+Content-Type: application/json
+
+{
+  "versionName": "source-1.0.0",
+  "data": {
+    "home": { "title": "Trang chủ" },
+    "login": { "button": "Đăng nhập" },
+    "welcome": "Xin chào {name}"
+  }
+}
+
+### List translations
+GET {{host}}/api/projects/1/translations?locale=en&status=missing
+Authorization: Bearer {{token}}
+
+### Save translation
+POST {{host}}/api/projects/1/translations
+Authorization: Bearer {{token}}
+Content-Type: application/json
+
+{
+  "stringId": 1,
+  "localeCode": "en",
+  "value": "Home",
+  "status": "translated",
+  "expectedRowVersion": 0
+}
+
+### Validate release
+GET {{host}}/api/projects/1/releases/validate
+Authorization: Bearer {{token}}
