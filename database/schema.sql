@@ -91,11 +91,12 @@ CREATE TABLE IF NOT EXISTS source_changes (
   CONSTRAINT fk_sc_string FOREIGN KEY(string_id) REFERENCES source_strings(id) ON DELETE CASCADE
 ) ENGINE=InnoDB;
 
+-- value NULL = khóa đã được phân công nhưng chưa có nội dung dịch (hiển thị là 'missing').
 CREATE TABLE IF NOT EXISTS translations (
   id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
   string_id BIGINT UNSIGNED NOT NULL,
   locale_code VARCHAR(20) NOT NULL,
-  value TEXT NOT NULL,
+  value TEXT NULL,
   status ENUM('draft','translated','needs_review','approved') NOT NULL DEFAULT 'draft',
   assigned_to BIGINT UNSIGNED NULL,
   row_version INT NOT NULL DEFAULT 1,
@@ -142,14 +143,20 @@ CREATE TABLE IF NOT EXISTS reviews (
   CONSTRAINT fk_r_reviewer FOREIGN KEY(reviewer_id) REFERENCES users(id) ON DELETE RESTRICT
 ) ENGINE=InnoDB;
 
+-- Release là snapshot bất biến: nội dung nằm trong release_files.content_json,
+-- sửa bản dịch sau khi phát hành không làm thay đổi release cũ.
 CREATE TABLE IF NOT EXISTS releases (
   id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
   project_id BIGINT UNSIGNED NOT NULL,
   version_name VARCHAR(120) NOT NULL,
+  source_version_id BIGINT UNSIGNED NULL,
+  note TEXT NULL,
+  key_count INT NOT NULL DEFAULT 0,
   published_by BIGINT UNSIGNED NOT NULL,
   published_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
   UNIQUE(project_id,version_name),
   CONSTRAINT fk_rel_project FOREIGN KEY(project_id) REFERENCES projects(id) ON DELETE CASCADE,
+  CONSTRAINT fk_rel_source_version FOREIGN KEY(source_version_id) REFERENCES source_versions(id) ON DELETE SET NULL,
   CONSTRAINT fk_rel_user FOREIGN KEY(published_by) REFERENCES users(id) ON DELETE RESTRICT
 ) ENGINE=InnoDB;
 
@@ -157,9 +164,11 @@ CREATE TABLE IF NOT EXISTS release_files (
   id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
   release_id BIGINT UNSIGNED NOT NULL,
   locale_code VARCHAR(20) NOT NULL,
+  is_source TINYINT(1) NOT NULL DEFAULT 0,
   file_name VARCHAR(190) NOT NULL,
   content_json LONGTEXT NOT NULL,
   sha256 CHAR(64) NOT NULL,
+  key_count INT NOT NULL DEFAULT 0,
   UNIQUE(release_id,locale_code),
   CONSTRAINT fk_rf_release FOREIGN KEY(release_id) REFERENCES releases(id) ON DELETE CASCADE,
   CONSTRAINT fk_rf_locale FOREIGN KEY(locale_code) REFERENCES locales(code) ON DELETE RESTRICT

@@ -1,3 +1,4 @@
+using System.Text.Encodings.Web;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 
@@ -40,25 +41,44 @@ public static class JsonTree
         output[path] = node.GetString() ?? string.Empty;
     }
 
+    private static readonly JsonSerializerOptions OutputOptions = new()
+    {
+        WriteIndented = true,
+        // Giữ nguyên tiếng Việt/Unicode trong file phát hành thay vì \uXXXX.
+        Encoder = JavaScriptEncoder.UnsafeRelaxedJsonEscaping
+    };
+
     public static string Unflatten(IEnumerable<KeyValuePair<string, string>> items)
     {
         var root = new JsonObject();
         foreach (var (key, value) in items)
         {
             var parts = key.Split('.', StringSplitOptions.RemoveEmptyEntries);
+            if (parts.Length == 0) continue;
+
             JsonObject current = root;
             for (var i = 0; i < parts.Length - 1; i++)
             {
-                if (current[parts[i]] is not JsonObject child)
+                switch (current[parts[i]])
                 {
-                    child = new JsonObject();
-                    current[parts[i]] = child;
+                    case null:
+                        var child = new JsonObject();
+                        current[parts[i]] = child;
+                        current = child;
+                        break;
+                    case JsonObject existing:
+                        current = existing;
+                        break;
+                    default:
+                        throw ApiException.Conflict($"Khóa '{key}' xung đột với một khóa lá khác khi dựng JSON.");
                 }
-                current = child;
             }
+
+            if (current[parts[^1]] is JsonObject)
+                throw ApiException.Conflict($"Khóa '{key}' xung đột với một nhóm khóa khác khi dựng JSON.");
             current[parts[^1]] = value;
         }
 
-        return root.ToJsonString(new JsonSerializerOptions { WriteIndented = true });
+        return root.ToJsonString(OutputOptions);
     }
 }
