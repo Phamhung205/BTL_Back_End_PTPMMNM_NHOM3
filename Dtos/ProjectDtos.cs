@@ -4,3 +4,4 @@ public sealed record CreateProjectRequest(string Name, string Slug, string Sourc
 public sealed record UpdateProjectRequest(string Name, string Slug);
 public sealed record AddMemberRequest(long UserId, string Role);
 public sealed record AttachLocaleRequest(string LocaleCode);
+public sealed record UpdateLocaleRequest(string Name);

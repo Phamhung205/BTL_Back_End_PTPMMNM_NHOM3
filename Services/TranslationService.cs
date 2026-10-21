@@ -115,7 +115,7 @@ ORDER BY ss.key_path";
         var list = new List<LocaleProgress>();
         await using var cmd = cn.CreateCommand();
         cmd.Transaction = tx;
-        cmd.CommandText = @"SELECT pl.locale_code, l.name,
+        cmd.CommandText = @"SELECT pl.locale_code, COALESCE(pl.display_name,l.name),
  COUNT(ss.id),
  COALESCE(SUM(CASE WHEN ss.id IS NOT NULL AND (t.id IS NULL OR t.value IS NULL) THEN 1 ELSE 0 END),0),
  COALESCE(SUM(CASE WHEN t.value IS NOT NULL AND t.status='draft' THEN 1 ELSE 0 END),0),
@@ -127,7 +127,7 @@ JOIN locales l ON l.code=pl.locale_code
 LEFT JOIN source_strings ss ON ss.project_id=pl.project_id AND ss.status='active'
 LEFT JOIN translations t ON t.string_id=ss.id AND t.locale_code=pl.locale_code
 WHERE pl.project_id=@project AND pl.is_source=0
-GROUP BY pl.locale_code, l.name
+GROUP BY pl.locale_code, pl.display_name, l.name
 ORDER BY pl.locale_code";
         cmd.Parameters.AddWithValue("@project", projectId);
         await using var rd = await cmd.ExecuteReaderAsync(ct);
@@ -163,7 +163,7 @@ ORDER BY pl.locale_code";
             await using (var cmd = cn.CreateCommand())
             {
                 cmd.Transaction = tx;
-                cmd.CommandText = "SELECT source_text FROM source_strings WHERE id=@id AND project_id=@project AND status='active'";
+                cmd.CommandText = "SELECT source_text FROM source_strings WHERE id=@id AND project_id=@project AND status='active' FOR UPDATE";
                 cmd.Parameters.AddWithValue("@id", request.StringId);
                 cmd.Parameters.AddWithValue("@project", projectId);
                 source = Convert.ToString(await cmd.ExecuteScalarAsync(ct)) ?? throw ApiException.NotFound("Không tìm thấy khóa nguồn đang hoạt động.");
@@ -438,7 +438,7 @@ WHERE h.translation_id=@id ORDER BY h.id DESC LIMIT 100";
 
         await using var cmd = cn.CreateCommand();
         cmd.Transaction = tx;
-        cmd.CommandText = "SELECT locale_code,is_source FROM project_locales WHERE project_id=@project AND locale_code=@locale";
+        cmd.CommandText = "SELECT locale_code,is_source FROM project_locales WHERE project_id=@project AND locale_code=@locale" + (tx is null ? "" : " FOR UPDATE");
         cmd.Parameters.AddWithValue("@project", projectId);
         cmd.Parameters.AddWithValue("@locale", code);
         await using var rd = await cmd.ExecuteReaderAsync(ct);

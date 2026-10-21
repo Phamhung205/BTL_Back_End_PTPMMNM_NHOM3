@@ -39,6 +39,7 @@ CREATE TABLE IF NOT EXISTS project_locales (
   project_id BIGINT UNSIGNED NOT NULL,
   locale_code VARCHAR(20) NOT NULL,
   is_source TINYINT(1) NOT NULL DEFAULT 0,
+  display_name VARCHAR(80) NULL,
   PRIMARY KEY(project_id,locale_code),
   CONSTRAINT fk_pl_project FOREIGN KEY(project_id) REFERENCES projects(id) ON DELETE CASCADE,
   CONSTRAINT fk_pl_locale FOREIGN KEY(locale_code) REFERENCES locales(code) ON DELETE RESTRICT
@@ -58,7 +59,7 @@ CREATE TABLE IF NOT EXISTS source_versions (
 CREATE TABLE IF NOT EXISTS source_strings (
   id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
   project_id BIGINT UNSIGNED NOT NULL,
-  key_path VARCHAR(500) NOT NULL,
+  key_path VARCHAR(500) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin NOT NULL,
   source_text TEXT NOT NULL,
   status ENUM('active','deleted') NOT NULL DEFAULT 'active',
   current_source_version_id BIGINT UNSIGNED NOT NULL,
@@ -73,7 +74,7 @@ CREATE TABLE IF NOT EXISTS source_string_versions (
   id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
   source_version_id BIGINT UNSIGNED NOT NULL,
   string_id BIGINT UNSIGNED NOT NULL,
-  key_path VARCHAR(500) NOT NULL,
+  key_path VARCHAR(500) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin NOT NULL,
   source_text TEXT NOT NULL,
   UNIQUE(source_version_id,string_id),
   CONSTRAINT fk_ssv_version FOREIGN KEY(source_version_id) REFERENCES source_versions(id) ON DELETE CASCADE,

@@ -20,13 +20,18 @@ public static class JsonTree
     {
         if (node.ValueKind == JsonValueKind.Object)
         {
+            var names = new HashSet<string>(StringComparer.Ordinal);
+            if (!node.EnumerateObject().Any()) throw ApiException.BadRequest($"Object tại '{path}' không chứa khóa dịch.");
             foreach (var property in node.EnumerateObject())
             {
+                if (!names.Add(property.Name)) throw ApiException.BadRequest($"Khóa JSON bị lặp tại '{path}': '{property.Name}'.");
                 if (string.IsNullOrWhiteSpace(property.Name))
                     throw ApiException.BadRequest("Tên khóa JSON không được rỗng.");
+                if (property.Name != property.Name.Trim()) throw ApiException.BadRequest("Tên khóa không được có khoảng trắng ở đầu hoặc cuối.");
                 if (property.Name.Contains('.'))
                     throw ApiException.BadRequest($"Tên khóa '{property.Name}' không được chứa dấu chấm trong quy ước hiện tại.");
                 var next = string.IsNullOrEmpty(path) ? property.Name : $"{path}.{property.Name}";
+                if (next.Length > 500) throw ApiException.BadRequest("Đường dẫn khóa JSON tối đa 500 ký tự.");
                 Walk(property.Value, next, output);
             }
             return;
@@ -38,7 +43,9 @@ public static class JsonTree
         if (node.ValueKind != JsonValueKind.String)
             throw ApiException.BadRequest($"Giá trị tại '{path}' phải là chuỗi.");
 
-        output[path] = node.GetString() ?? string.Empty;
+        var value = node.GetString() ?? string.Empty;
+        if (value.Length > 10000) throw ApiException.BadRequest($"Nội dung tại '{path}' tối đa 10000 ký tự.");
+        output.Add(path, value);
     }
 
     private static readonly JsonSerializerOptions OutputOptions = new()

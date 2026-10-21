@@ -38,7 +38,10 @@ public sealed partial class ReleaseService(Db db, IConfiguration configuration, 
     public async Task<ReleaseValidation> ValidateAsync(long projectId, CancellationToken ct = default)
     {
         await using var cn = await db.OpenAsync(ct);
-        return await ValidateCoreAsync(cn, null, projectId, ct);
+        await using var tx = await cn.BeginTransactionAsync(IsolationLevel.RepeatableRead, ct);
+        var result = await ValidateCoreAsync(cn, tx, projectId, ct);
+        await tx.CommitAsync(ct);
+        return result;
     }
 
     private static async Task<ReleaseValidation> ValidateCoreAsync(MySqlConnection cn, MySqlTransaction? tx, long projectId, CancellationToken ct)
@@ -67,6 +70,32 @@ public sealed partial class ReleaseService(Db db, IConfiguration configuration, 
 
         var problems = new List<string>();
         if (activeStrings == 0) problems.Add("Dự án chưa có chuỗi nguồn. Hãy import phiên bản nguồn trước.");
+        if (sourceVersionId is null) problems.Add("Dự án chưa có phiên bản nguồn để chốt phát hành.");
+        await using (var cmd = cn.CreateCommand())
+        {
+            cmd.Transaction = tx;
+            cmd.CommandText = @"SELECT COUNT(*) FROM project_locales pl JOIN projects p ON p.id=pl.project_id
+WHERE pl.project_id=@project AND pl.is_source=1 AND pl.locale_code=p.source_locale_code";
+            cmd.Parameters.AddWithValue("@project", projectId);
+            if (Convert.ToInt32(await cmd.ExecuteScalarAsync(ct)) != 1)
+                problems.Add("Ngôn ngữ nguồn của dự án chưa được cấu hình đúng.");
+        }
+        if (sourceVersionId.HasValue)
+        {
+            await using var cmd = cn.CreateCommand();
+            cmd.Transaction = tx;
+            cmd.CommandText = @"SELECT
+(SELECT COUNT(*) FROM source_strings ss LEFT JOIN source_string_versions snap ON snap.string_id=ss.id AND snap.source_version_id=@version
+ WHERE ss.project_id=@project AND ss.status='active' AND (snap.id IS NULL OR BINARY snap.key_path<>BINARY ss.key_path
+ OR BINARY snap.source_text<>BINARY ss.source_text OR ss.current_source_version_id<>@version)),
+(SELECT COUNT(*) FROM source_string_versions WHERE source_version_id=@version)";
+            cmd.Parameters.AddWithValue("@project", projectId);
+            cmd.Parameters.AddWithValue("@version", sourceVersionId.Value);
+            await using var rd = await cmd.ExecuteReaderAsync(ct);
+            await rd.ReadAsync(ct);
+            if (rd.GetInt64(0) != 0 || rd.GetInt64(1) != activeStrings)
+                problems.Add("Khóa nguồn hiện tại không khớp snapshot của phiên bản nguồn mới nhất. Hãy import lại nguồn hợp lệ.");
+        }
         if (locales.Length == 0) problems.Add("Dự án chưa có ngôn ngữ đích để phát hành.");
         foreach (var l in locales.Where(l => l.Approved < l.Total))
         {
@@ -96,6 +125,7 @@ public sealed partial class ReleaseService(Db db, IConfiguration configuration, 
             await using var cn = await db.OpenAsync(ct);
             // REPEATABLE READ: mọi SELECT trong transaction đọc cùng một snapshot => các file nhất quán với nhau.
             await using var tx = await cn.BeginTransactionAsync(IsolationLevel.RepeatableRead, ct);
+            await ProjectWriteLock.AcquireAsync(cn, tx, projectId, ct);
 
             await using (var cmd = cn.CreateCommand())
             {

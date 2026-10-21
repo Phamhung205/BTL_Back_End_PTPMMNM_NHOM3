@@ -32,6 +32,17 @@ public sealed class ApiExceptionMiddleware(RequestDelegate next, ILogger<ApiExce
                 message = "Dữ liệu đã tồn tại hoặc bị xung đột."
             });
         }
+        catch (BadHttpRequestException ex)
+        {
+            context.Response.StatusCode = ex.StatusCode;
+            await context.Response.WriteAsJsonAsync(new
+            {
+                success = false,
+                message = ex.StatusCode == StatusCodes.Status413PayloadTooLarge
+                    ? "Tệp JSON nguồn vượt quá giới hạn 2 MB."
+                    : "Yêu cầu HTTP không hợp lệ."
+            });
+        }
         catch (Exception ex)
         {
             logger.LogError(ex, "Unhandled backend error");

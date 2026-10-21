@@ -10,7 +10,15 @@ namespace TranslationManager.Api.Controllers;
 [Route("api/projects/{projectId:long}/source-versions")]
 public sealed class SourceVersionsController(ProjectAccessService access, SourceVersionService source) : ControllerBase
 {
+    [HttpGet]
+    public async Task<IActionResult> List(long projectId, CancellationToken ct)
+    {
+        await access.GetRoleAsync(projectId, User.UserId(), ct);
+        return Ok(await source.ListAsync(projectId, ct));
+    }
+
     [HttpPost("import")]
+    [RequestSizeLimit(2 * 1024 * 1024 + 8192)]
     public async Task<IActionResult> Import(long projectId, ImportSourceRequest request, CancellationToken ct)
     {
         var userId=User.UserId();
@@ -19,9 +27,9 @@ public sealed class SourceVersionsController(ProjectAccessService access, Source
     }
 
     [HttpGet("{versionId:long}/changes")]
-    public async Task<IActionResult> Changes(long projectId,long versionId,CancellationToken ct)
+    public async Task<IActionResult> Changes(long projectId,long versionId,[FromQuery] long? compareToVersionId,CancellationToken ct)
     {
         await access.GetRoleAsync(projectId,User.UserId(),ct);
-        return Ok(await source.ChangesAsync(projectId,versionId,ct));
+        return Ok(await source.ChangesAsync(projectId,versionId,compareToVersionId,ct));
     }
 }

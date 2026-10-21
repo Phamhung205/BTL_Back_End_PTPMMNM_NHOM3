@@ -82,8 +82,12 @@ GET  /api/projects/{projectId}/members
 POST /api/projects/{projectId}/members
 GET  /api/projects/{projectId}/locales
 POST /api/projects/{projectId}/locales
+PUT  /api/projects/{projectId}/locales/{code}
+DELETE /api/projects/{projectId}/locales/{code}
+GET  /api/projects/{projectId}/translation-keys?q=&status=all
 
 POST /api/projects/{projectId}/source-versions/import
+GET  /api/projects/{projectId}/source-versions
 GET  /api/projects/{projectId}/source-versions/{versionId}/changes
 
 GET  /api/projects/{projectId}/translations?locale=en&q=&status=&assignee=
@@ -104,6 +108,55 @@ GET  /api/projects/{projectId}/releases/{releaseId}
 GET  /api/projects/{projectId}/releases/{releaseId}/files/{locale}
 GET  /api/projects/{projectId}/releases/{releaseId}/download
 ```
+
+## Module Language / Translation Key / Source Version (Bùi Đình Mạnh)
+
+### Khởi tạo hoặc nâng cấp CSDL
+
+- CSDL mới: chạy `database/schema.sql`, sau đó `database/seed.sql`.
+- CSDL đã có: giữ dữ liệu hiện tại, chạy `database/migrations/003_manh_source_management.sql`. Nếu đang dùng schema rất cũ, chạy migration 002 trước 003.
+- Migration 003 bổ sung `project_locales.display_name` và dùng `utf8mb4_bin` cho đường dẫn khóa trong nguồn và snapshot. Có thể chạy lại; không xóa bản dịch hoặc release.
+- `NuGet.Config` chỉ dùng nguồn nuget.org và bỏ fallback riêng của Visual Studio, giúp restore được trên máy không cài Visual Studio.
+
+### API và quyền
+
+Tất cả route dưới đây có prefix `/api/projects/{projectId}` và yêu cầu JWT. Thành viên dự án được đọc; chỉ manager được thêm/sửa/gỡ ngôn ngữ và import nguồn.
+
+| Method / route | Dữ liệu |
+| --- | --- |
+| `GET /locales` | `[{code,name,isSource}]`; tên ưu tiên theo dự án |
+| `POST /locales` | `{localeCode}`; hỗ trợ mã `vi`, `en`, `zh`, `en-US` |
+| `PUT /locales/{code}` | `{name}`; tên 1–80 ký tự, chỉ thay đổi trong dự án này |
+| `DELETE /locales/{code}` | 204 khi thành công; 409 nếu đã có bản dịch/phân công hoặc release; giữ nguyên toàn bộ dữ liệu khi bị từ chối |
+| `GET /translation-keys?q=&status=all` | `[{id,key,sourceText,status,sourceVersionId,updatedAt}]`; status: `all`, `active`, `deleted` |
+| `GET /source-versions` | Mới nhất trước; `id,versionName,importedAt,importedBy,importedById,keyCount,added,changed,restored,deleted,unchanged` |
+| `POST /source-versions/import` | `{versionName,data}` → `versionId,versionName,total,added,changed,unchanged,deleted` |
+| `GET /source-versions/{versionId}/changes` | Thay đổi so với lần import trước: `[{type,key,oldValue,newValue}]` |
+| `GET /source-versions/{versionId}/changes?compareToVersionId={baseId}` | So sánh hai snapshot bất kỳ trong cùng dự án; kiểu `new/changed/deleted` so với base |
+
+Không được sửa/gỡ ngôn ngữ nguồn. Không xóa locale dùng chung khỏi catalog. Mã ngôn ngữ được chuẩn hóa chữ thường; mã hoặc tên không hợp lệ trả 400. Thêm trùng trả 409. Phiên bản không tồn tại hoặc thuộc dự án khác trả 404; người ngoài dự án trả 403.
+
+### Quy ước JSON và cập nhật nguồn
+
+- JSON object lồng nhau, giá trị chuỗi, tối đa 2 MB; tên phiên bản 1–120 ký tự và không trùng trong dự án.
+- Khóa phân biệt hoa/thường và dấu: `Title`, `title`, `ten`, `tên` là bốn khóa độc lập.
+- Tên khóa không rỗng, không có khoảng trắng đầu/cuối, không chứa dấu chấm; đường dẫn tối đa 500 ký tự, chuỗi tối đa 10000 ký tự. Không hỗ trợ mảng, số, boolean, null, object rỗng hoặc thuộc tính JSON bị lặp. Giới hạn độ sâu theo System.Text.Json mặc định là 64.
+- Mỗi tệp là **toàn bộ snapshot nguồn**. Khóa vắng mặt được đánh dấu `deleted`; khóa quay lại dùng lại ID và ghi change `restored`. Lịch sử, snapshot và nội dung bản dịch được giữ nguyên.
+- Nhập lại cùng nội dung dưới tên phiên bản mới không nhân đôi khóa và không thay trạng thái/row_version của bản dịch không liên quan.
+- Nguồn sửa/xóa/khôi phục làm tăng `row_version` của mọi bản dịch liên quan. Nháp vẫn là `draft`; các trạng thái khác thành `needs_review`. Client đang giữ bản nháp cũ phải tải lại trước khi lưu.
+- Import, thay đổi locale và publish được tuần tự hóa bằng khóa dự án trong transaction; không tạo snapshot trộn từ hai lần import đồng thời.
+- Kiểm tra release đối chiếu ngôn ngữ nguồn, snapshot nguồn mới nhất và tiến độ duyệt. Nguồn không khớp snapshot hoặc bản dịch chưa duyệt đủ sẽ bị chặn; release đã chốt giữ nguyên.
+
+### Kiểm thử API local
+
+Backend và MariaDB phải đang chạy; dùng một CSDL kiểm thử. Test tạo tài khoản/dự án giả mới theo mỗi lần chạy, không dọn dữ liệu dự án có sẵn.
+
+```powershell
+node tests/api/manh-source-management.test.mjs http://localhost:5088
+node tests/api/duc-translation-release.test.mjs http://localhost:5088
+```
+
+Bộ Mạnh gồm 10 nhóm: quyền, locale độc lập giữa dự án, JSON sai/giới hạn tệp, hơn 100 khóa, Unicode/hoa-thường, import lại/trùng phiên bản, draft conflict khi nguồn đổi, xóa/khôi phục, diff hai snapshot, import đồng thời và release cũ giữ nguyên.
 
 ## Module Translation / Review / Release (Phạm Thế Đức)
 

@@ -37,6 +37,22 @@ public sealed class ProjectsController(ProjectService projects, ProjectAccessSer
         return Ok(new { success=true });
     }
 
+    [HttpPut("{projectId:long}/locales/{code}")]
+    public async Task<IActionResult> UpdateLocale(long projectId, string code, UpdateLocaleRequest request, CancellationToken ct)
+    {
+        await access.RequireManagerAsync(projectId, User.UserId(), ct);
+        await locales.UpdateAsync(projectId, code, request.Name, ct);
+        return Ok(new { success = true });
+    }
+
+    [HttpDelete("{projectId:long}/locales/{code}")]
+    public async Task<IActionResult> DetachLocale(long projectId, string code, CancellationToken ct)
+    {
+        await access.RequireManagerAsync(projectId, User.UserId(), ct);
+        await locales.DetachAsync(projectId, code, ct);
+        return NoContent();
+    }
+
     [HttpGet("{projectId:long}/members")]
     public async Task<IActionResult> Members(long projectId, CancellationToken ct)
     {
