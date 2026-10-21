@@ -1,7 +1,5 @@
-using System.Text;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
-using TranslationManager.Api.Data;
 using TranslationManager.Api.Dtos;
 using TranslationManager.Api.Services;
 using TranslationManager.Api.Support;
@@ -10,7 +8,7 @@ namespace TranslationManager.Api.Controllers;
 
 [ApiController, Authorize]
 [Route("api/projects/{projectId:long}/releases")]
-public sealed class ReleasesController(ProjectAccessService access, ReleaseService releases, Db db) : ControllerBase
+public sealed class ReleasesController(ProjectAccessService access, ReleaseService releases) : ControllerBase
 {
     [HttpGet("validate")]
     public async Task<IActionResult> Validate(long projectId,CancellationToken ct)
@@ -19,26 +17,28 @@ public sealed class ReleasesController(ProjectAccessService access, ReleaseServi
         return Ok(await releases.ValidateAsync(projectId,ct));
     }
 
+    /// <summary>Chốt snapshot và phát hành (chỉ manager).</summary>
     [HttpPost]
     public async Task<IActionResult> Publish(long projectId,PublishReleaseRequest request,CancellationToken ct)
     {
         var userId=User.UserId();
         await access.RequireManagerAsync(projectId,userId,ct);
-        return Ok(await releases.PublishAsync(projectId,userId,request.VersionName,ct));
+        var release=await releases.PublishAsync(projectId,userId,request,ct);
+        return Created($"/api/projects/{projectId}/releases/{release.Id}",release);
     }
 
     [HttpGet]
     public async Task<IActionResult> List(long projectId,CancellationToken ct)
     {
         await access.GetRoleAsync(projectId,User.UserId(),ct);
-        var list=new List<object>();
-        await using var cn=await db.OpenAsync(ct);
-        await using var cmd=cn.CreateCommand();
-        cmd.CommandText="SELECT id,version_name,published_at,published_by FROM releases WHERE project_id=@project ORDER BY id DESC";
-        cmd.Parameters.AddWithValue("@project",projectId);
-        await using var rd=await cmd.ExecuteReaderAsync(ct);
-        while(await rd.ReadAsync(ct)) list.Add(new { id=rd.GetInt64(0),version=rd.GetString(1),publishedAt=rd.GetDateTime(2),publishedBy=rd.GetInt64(3) });
-        return Ok(list);
+        return Ok(await releases.ListAsync(projectId,ct));
+    }
+
+    [HttpGet("{releaseId:long}")]
+    public async Task<IActionResult> Detail(long projectId,long releaseId,CancellationToken ct)
+    {
+        await access.GetRoleAsync(projectId,User.UserId(),ct);
+        return Ok(await releases.GetAsync(projectId,releaseId,ct));
     }
 
     [HttpGet("{releaseId:long}/files/{locale}")]
@@ -46,6 +46,16 @@ public sealed class ReleasesController(ProjectAccessService access, ReleaseServi
     {
         await access.GetRoleAsync(projectId,User.UserId(),ct);
         var file=await releases.FileAsync(projectId,releaseId,locale,ct);
-        return File(Encoding.UTF8.GetBytes(file.Json),"application/json; charset=utf-8",file.FileName);
+        Response.Headers["X-Content-SHA256"]=file.Sha256;
+        return File(file.Content,"application/json; charset=utf-8",file.FileName);
+    }
+
+    /// <summary>Tải cả gói ngôn ngữ (.zip gồm các file JSON + manifest.json).</summary>
+    [HttpGet("{releaseId:long}/download")]
+    public async Task<IActionResult> DownloadPackage(long projectId,long releaseId,CancellationToken ct)
+    {
+        await access.GetRoleAsync(projectId,User.UserId(),ct);
+        var package=await releases.ZipAsync(projectId,releaseId,ct);
+        return File(package.Content,"application/zip",package.FileName);
     }
 }

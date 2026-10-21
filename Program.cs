@@ -50,7 +50,9 @@ builder.Services.AddCors(options =>
     options.AddPolicy("Frontend", policy =>
         policy.WithOrigins(origins)
               .AllowAnyHeader()
-              .AllowAnyMethod());
+              .AllowAnyMethod()
+              // Cho Frontend đọc tên file và mã SHA-256 khi tải gói phát hành.
+              .WithExposedHeaders("Content-Disposition", "X-Content-SHA256"));
 });
 
 var app = builder.Build();

@@ -72,6 +72,95 @@ Content-Type: application/json
   "expectedRowVersion": 0
 }
 
+### ===== Module Translation / Review / Release (Đức) =====
+
+### Lọc bản dịch: status = missing|draft|translated|needs_review|approved, assignee = me|none|{userId}
+GET {{host}}/api/projects/1/translations?locale=en&q=login&status=&assignee=
+Authorization: Bearer {{token}}
+
+### Tiến độ theo ngôn ngữ
+GET {{host}}/api/projects/1/translations/stats
+Authorization: Bearer {{token}}
+
+### Gửi review (placeholder phải khớp nguồn, sai => 400 kèm details.missing/extra)
+POST {{host}}/api/projects/1/translations
+Authorization: Bearer {{token}}
+Content-Type: application/json
+
+{
+  "stringId": 3,
+  "localeCode": "en",
+  "value": "Hello {name}",
+  "status": "translated",
+  "expectedRowVersion": 0
+}
+
+### Phân công hàng loạt (manager) — userId null = bỏ phân công
+PUT {{host}}/api/projects/1/translations/assign
+Authorization: Bearer {{token}}
+Content-Type: application/json
+
+{ "localeCode": "en", "stringIds": [1, 2], "userId": 2 }
+
+### Phân công một bản dịch đã có
+PUT {{host}}/api/projects/1/translations/1/assign
+Authorization: Bearer {{token}}
+Content-Type: application/json
+
+{ "userId": 2, "expectedRowVersion": 1 }
+
+### Bình luận
+POST {{host}}/api/projects/1/translations/1/comments
+Authorization: Bearer {{token}}
+Content-Type: application/json
+
+{ "body": "Nên dùng thuật ngữ thống nhất" }
+
+### Xem bình luận / lịch sử
+GET {{host}}/api/projects/1/translations/1/comments
+Authorization: Bearer {{token}}
+
+###
+GET {{host}}/api/projects/1/translations/1/history
+Authorization: Bearer {{token}}
+
+### Duyệt (manager/reviewer) — expectedRowVersion sai => 409
+POST {{host}}/api/projects/1/translations/1/approve
+Authorization: Bearer {{token}}
+Content-Type: application/json
+
+{ "note": null, "expectedRowVersion": 2 }
+
+### Từ chối (bắt buộc có note)
+POST {{host}}/api/projects/1/translations/1/reject
+Authorization: Bearer {{token}}
+Content-Type: application/json
+
+{ "note": "Sai thuật ngữ", "expectedRowVersion": 2 }
+
 ### Validate release
 GET {{host}}/api/projects/1/releases/validate
+Authorization: Bearer {{token}}
+
+### Chốt phát hành (manager) — trùng phiên bản => 409
+POST {{host}}/api/projects/1/releases
+Authorization: Bearer {{token}}
+Content-Type: application/json
+
+{ "versionName": "1.0.0", "note": "Bản đầu tiên" }
+
+### Danh sách / chi tiết release
+GET {{host}}/api/projects/1/releases
+Authorization: Bearer {{token}}
+
+###
+GET {{host}}/api/projects/1/releases/1
+Authorization: Bearer {{token}}
+
+### Tải file JSON một ngôn ngữ (header X-Content-SHA256)
+GET {{host}}/api/projects/1/releases/1/files/en
+Authorization: Bearer {{token}}
+
+### Tải cả gói .zip (các file JSON + manifest.json)
+GET {{host}}/api/projects/1/releases/1/download
 Authorization: Bearer {{token}}
