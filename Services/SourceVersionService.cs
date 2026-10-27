@@ -1,5 +1,4 @@
 using MySqlConnector;
-using System.Text;
 using TranslationManager.Api.Data;
 using TranslationManager.Api.Dtos;
 using TranslationManager.Api.Support;
@@ -10,11 +9,7 @@ public sealed class SourceVersionService(Db db)
 {
     public async Task<object> ImportAsync(long projectId, long userId, ImportSourceRequest request, CancellationToken ct = default)
     {
-        if (request.Data.ValueKind != System.Text.Json.JsonValueKind.Object)
-            throw ApiException.BadRequest("JSON nguồn phải có object ở cấp gốc.");
-        if (Encoding.UTF8.GetByteCount(request.Data.GetRawText()) > 2 * 1024 * 1024)
-            throw ApiException.BadRequest("JSON nguồn tối đa 2 MB.");
-        var flat = JsonTree.Flatten(request.Data);
+        var flat = SourceDocument.Read(request);
         if (flat.Count == 0) throw ApiException.BadRequest("Tệp nguồn không có khóa dịch.");
         var versionName = (request.VersionName ?? "").Trim();
         if (versionName.Length is < 1 or > 120) throw ApiException.BadRequest("Tên phiên bản nguồn phải có từ 1 đến 120 ký tự.");

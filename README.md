@@ -1,5 +1,7 @@
 # Translation Manager Backend
 
+Cập nhật 22/10/2026: Frontend PHP đã bổ sung ba màn hình Ngôn ngữ / Phiên bản nguồn / Translation Keys. Nhập nguồn hỗ trợ `{versionName,rawJson}` để kiểm tra khóa bị lặp và kích thước tệp gốc khi đi qua gateway PHP. Payload cũ `{versionName,data}` tiếp tục được hỗ trợ; chỉ gửi một trong `rawJson`/`data`. Nội dung nguồn tối đa 2 MB UTF-8; HTTP envelope tối đa 4 MB + 8 KB để chứa ký tự escape. SQL không tự động chạy; CSDL cũ của ba module này cần `database/migrations/003_manh_source_management.sql`.
+
 Backend riêng cho BTL **Xây dựng hệ thống quản lý bản dịch và phát hành gói ngôn ngữ cho phần mềm**.
 
 ## Công nghệ
@@ -247,3 +249,25 @@ TranslationManager.Backend/
 ├── web.config
 └── README.md
 ```
+
+## Hoàn thiện giao diện và API hỗ trợ — 25/10/2026
+
+Frontend đã nối đầy đủ Translation/Review/Release, phân công hàng loạt, bình luận, xử lý xung đột rowVersion và tải JSON/ZIP qua phiên PHP có CSRF. Danh sách bản dịch trả canEdit theo quyền hiện tại của người đăng nhập.
+
+API bổ sung trong WorkspaceController:
+- GET /api/dashboard/stats: projects, managedProjects, languages, pendingTranslations; chỉ thống kê các dự án hiện tham gia.
+- GET /api/projects/{projectId}/activity?page=1: {items,page,hasMore}; tối đa 50 hoạt động mỗi trang, gồm nguồn, bản dịch, phân công, đánh giá, bình luận và phát hành.
+
+Nếu CSDL MariaDB đã có đủ bảng nhưng dùng schema cũ, cần migration 002 rồi 003. Controller mới không thêm bảng. Lượt này migration chỉ được chạy trên database kiểm thử riêng ở cổng 3307, không sửa database XAMPP cổng 3306.
+
+Hai Backend build thành công. Bộ Translation/Release đạt 13/13 nhóm, Source/Locale đạt 10/10 nhóm; luồng đầy đủ qua gateway đạt 53/53 kiểm tra trên MariaDB kiểm thử. Chi tiết sử dụng ở WORKFLOW_FEATURES.md trong Frontend.
+
+## Admin hệ thống và demo
+
+Migration 004_system_admin.sql bổ sung users.system_role/is_active/security_version, system_admin_guard và admin_audit. API /api/admin/* yêu cầu policy SystemAdmin; JWT đọc lại quyền và trạng thái người dùng trên mỗi request. GET /api/auth/me trả danh tính hiện tại. Vai trò Admin độc lập với manager/translator/reviewer của dự án.
+
+Admin quản lý tài khoản, khóa/mở, vai trò hệ thống, toàn bộ dự án/thành viên và đọc nhật ký. Bảo vệ Admin đang hoạt động cuối cùng và Manager đang hoạt động cuối cùng. Không tự cấp quyền Admin qua đăng ký công khai.
+
+Admin đầu tiên được tạo bằng CLI --bootstrap-admin với BootstrapAdmin__Email, BootstrapAdmin__DisplayName, BootstrapAdmin__Password (12+ ký tự), connection string và JWT phù hợp. Lệnh không cấp thêm Admin nếu đã có Admin, không có bootstrap API công khai.
+
+Frontend có prepare-demo.ps1 và test-all.ps1. Bộ demo dùng translation_manager_demo ở MariaDB riêng cổng 3307. Hướng dẫn và tài khoản demo: DEMO_GUIDE.md trong Frontend. Không áp dụng mật khẩu demo vào hệ thống thật.

@@ -30,12 +30,15 @@ WHERE pm.user_id=@user ORDER BY p.id DESC";
         var name = request.Name.Trim();
         var slug = request.Slug.Trim().ToLowerInvariant();
         var sourceLocale = request.SourceLocaleCode.Trim();
-        if (name.Length < 2) throw ApiException.BadRequest("Tên dự án quá ngắn.");
-        if (!SlugRegex().IsMatch(slug)) throw ApiException.BadRequest("Slug chỉ gồm chữ thường, số và dấu gạch ngang.");
+        ValidateProject(name, slug);
         if (sourceLocale.Length is < 2 or > 20) throw ApiException.BadRequest("Mã ngôn ngữ nguồn không hợp lệ.");
 
         await using var cn = await db.OpenAsync(ct);
         await using var tx = await cn.BeginTransactionAsync(ct);
+        await SystemAdminGuard.LockAsync(cn, tx, ct);
+        await using var activeUser = new MySqlConnector.MySqlCommand("SELECT id FROM users WHERE id=@user AND is_active=1", cn, tx);
+        activeUser.Parameters.AddWithValue("@user", userId);
+        if (await activeUser.ExecuteScalarAsync(ct) is null) throw ApiException.Unauthorized();
 
         await using var cmd = cn.CreateCommand();
         cmd.Transaction = tx;

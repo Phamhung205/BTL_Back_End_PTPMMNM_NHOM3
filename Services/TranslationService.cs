@@ -15,6 +15,7 @@ public sealed class TranslationService(Db db)
     private const int MaxValueLength = 10000;
     private const int MaxCommentLength = 2000;
     private const int MaxBulkAssign = 500;
+    private const int MaxBulkDelete = 10000;
 
     // Trạng thái hiển thị: chưa có dòng hoặc dòng chỉ có phân công (value NULL) => missing.
     private const string DisplayStatusSql = "CASE WHEN t.id IS NULL OR t.value IS NULL THEN 'missing' ELSE t.status END";
@@ -38,7 +39,7 @@ public sealed class TranslationService(Db db)
 
     // ===================== Danh sách / tìm kiếm / lọc =====================
 
-    public async Task<object[]> ListAsync(long projectId, long currentUserId, string? locale, string? q, string? status, string? assignee, CancellationToken ct = default)
+    public async Task<object[]> ListAsync(long projectId, long currentUserId, string role, string? locale, string? q, string? status, string? assignee, CancellationToken ct = default)
     {
         var statusFilter = (status ?? "").Trim().ToLowerInvariant();
         if (statusFilter.Length > 0 && !TranslationStatus.Filterable.Contains(statusFilter))
@@ -92,6 +93,7 @@ ORDER BY ss.key_path";
                 status = rd.GetString(5),
                 assignedTo = rd.IsDBNull(6) ? (long?)null : rd.GetInt64(6),
                 assignedToName = rd.IsDBNull(7) ? null : rd.GetString(7),
+                canEdit = role == ProjectRole.Manager || (role == ProjectRole.Translator && (rd.IsDBNull(6) || rd.GetInt64(6) == currentUserId)),
                 rowVersion = rd.IsDBNull(8) ? 0 : rd.GetInt32(8),
                 updatedAt = rd.IsDBNull(9) ? (DateTime?)null : rd.GetDateTime(9),
                 updatedByName = rd.IsDBNull(10) ? null : rd.GetString(10),
@@ -316,6 +318,127 @@ VALUES(@string,@locale,NULL,'draft',@assignee,1,@manager); SELECT LAST_INSERT_ID
         }
     }
 
+    // ===================== Tạo bản ghi còn thiếu / xóa vĩnh viễn =====================
+
+    public async Task<object> CreateMissingAsync(long projectId, long managerId, string? localeCode, CancellationToken ct = default)
+    {
+        await using var cn = await db.OpenAsync(ct);
+        await using var tx = await cn.BeginTransactionAsync(ct);
+        await LockManagerMutationAsync(cn, tx, projectId, managerId, ct);
+        var locale = await RequireTargetLocaleAsync(cn, tx, projectId, localeCode, ct);
+        var missing = new List<long>();
+        var total = 0;
+        await using (var cmd = cn.CreateCommand())
+        {
+            cmd.Transaction = tx;
+            cmd.CommandText = @"SELECT ss.id,t.id FROM source_strings ss
+LEFT JOIN translations t ON t.string_id=ss.id AND t.locale_code=@locale
+WHERE ss.project_id=@project AND ss.status='active' ORDER BY ss.id FOR UPDATE";
+            cmd.Parameters.AddWithValue("@project", projectId);
+            cmd.Parameters.AddWithValue("@locale", locale);
+            await using var rd = await cmd.ExecuteReaderAsync(ct);
+            while (await rd.ReadAsync(ct)) { total++; if (rd.IsDBNull(1)) missing.Add(rd.GetInt64(0)); }
+        }
+        // Chunk SQL parameters within one transaction; existing translations are never overwritten.
+        foreach (var chunk in missing.Chunk(500))
+        {
+            await using var insert = cn.CreateCommand();
+            insert.Transaction = tx;
+            var names = chunk.Select((_, i) => $"@s{i}").ToArray();
+            insert.CommandText = "INSERT INTO translations(string_id,locale_code,value,status,assigned_to,row_version,updated_by) VALUES "
+                + string.Join(',', names.Select(name => $"({name},@locale,NULL,'draft',NULL,1,@manager)"));
+            insert.Parameters.AddWithValue("@locale", locale);
+            insert.Parameters.AddWithValue("@manager", managerId);
+            for (var i = 0; i < chunk.Length; i++) insert.Parameters.AddWithValue(names[i], chunk[i]);
+            await insert.ExecuteNonQueryAsync(ct);
+
+            await using var history = cn.CreateCommand();
+            history.Transaction = tx;
+            history.CommandText = $@"INSERT INTO translation_history(translation_id,user_id,old_value,new_value,action)
+SELECT id,@manager,NULL,NULL,'created' FROM translations WHERE locale_code=@locale AND string_id IN ({string.Join(',', names)})";
+            history.Parameters.AddWithValue("@locale", locale);
+            history.Parameters.AddWithValue("@manager", managerId);
+            for (var i = 0; i < chunk.Length; i++) history.Parameters.AddWithValue(names[i], chunk[i]);
+            await history.ExecuteNonQueryAsync(ct);
+        }
+        await tx.CommitAsync(ct);
+        return new { localeCode = locale, created = missing.Count, existing = total - missing.Count };
+    }
+
+    public async Task<object> DeleteAsync(long projectId, long managerId, long translationId, int expectedRowVersion, CancellationToken ct = default)
+    {
+        if (translationId <= 0 || expectedRowVersion <= 0) throw ApiException.BadRequest("Bản dịch hoặc phiên bản xóa không hợp lệ.");
+        await using var cn = await db.OpenAsync(ct);
+        await using var tx = await cn.BeginTransactionAsync(ct);
+        await LockManagerMutationAsync(cn, tx, projectId, managerId, ct);
+        var row = await LockByIdAsync(cn, tx, projectId, translationId, ct) ?? throw ApiException.NotFound("Bản dịch không còn tồn tại trong dự án.");
+        if (row.RowVersion != expectedRowVersion) throw ConflictFor(row, "Bản dịch đã được cập nhật. Hãy tải lại trước khi xóa.");
+        await using var cmd = cn.CreateCommand();
+        cmd.Transaction = tx;
+        cmd.CommandText = "DELETE FROM translations WHERE id=@id";
+        cmd.Parameters.AddWithValue("@id", row.Id);
+        var deleted = await cmd.ExecuteNonQueryAsync(ct);
+        await tx.CommitAsync(ct);
+        return new { deleted, localeCode = row.LocaleCode };
+    }
+
+    public async Task<object> BulkDeleteAsync(long projectId, long managerId, BulkDeleteTranslationsRequest request, CancellationToken ct = default)
+    {
+        var items = request.Items ?? [];
+        if (items.Length is < 1 or > MaxBulkDelete) throw ApiException.BadRequest($"Chọn từ 1 đến {MaxBulkDelete} bản dịch để xóa.");
+        if (items.Any(item => item is null || item.TranslationId <= 0 || item.ExpectedRowVersion <= 0)
+            || items.Select(item => item.TranslationId).Distinct().Count() != items.Length)
+            throw ApiException.BadRequest("Danh sách bản dịch hoặc phiên bản xóa không hợp lệ.");
+
+        await using var cn = await db.OpenAsync(ct);
+        await using var tx = await cn.BeginTransactionAsync(ct);
+        await LockManagerMutationAsync(cn, tx, projectId, managerId, ct);
+        var locale = await RequireTargetLocaleAsync(cn, tx, projectId, request.LocaleCode, ct);
+        var expected = items.ToDictionary(item => item.TranslationId, item => item.ExpectedRowVersion);
+        var names = items.Select((_, i) => $"@t{i}").ToArray();
+        var found = 0;
+        await using (var cmd = cn.CreateCommand())
+        {
+            cmd.Transaction = tx;
+            cmd.CommandText = $@"SELECT t.id,t.row_version FROM translations t JOIN source_strings ss ON ss.id=t.string_id
+WHERE ss.project_id=@project AND t.locale_code=@locale AND t.id IN ({string.Join(',', names)}) ORDER BY t.id FOR UPDATE";
+            cmd.Parameters.AddWithValue("@project", projectId);
+            cmd.Parameters.AddWithValue("@locale", locale);
+            for (var i = 0; i < items.Length; i++) cmd.Parameters.AddWithValue(names[i], items[i].TranslationId);
+            await using var rd = await cmd.ExecuteReaderAsync(ct);
+            while (await rd.ReadAsync(ct))
+            {
+                found++;
+                if (rd.GetInt32(1) != expected[rd.GetInt64(0)])
+                    throw ApiException.Conflict("Có bản dịch vừa được cập nhật. Chưa xóa bản dịch nào; hãy tải lại danh sách.");
+            }
+        }
+        if (found != items.Length) throw ApiException.NotFound("Có bản dịch không còn tồn tại hoặc không thuộc ngôn ngữ/dự án đã chọn. Chưa xóa bản dịch nào.");
+        await using var delete = cn.CreateCommand();
+        delete.Transaction = tx;
+        delete.CommandText = $"DELETE FROM translations WHERE id IN ({string.Join(',', names)})";
+        for (var i = 0; i < items.Length; i++) delete.Parameters.AddWithValue(names[i], items[i].TranslationId);
+        var deleted = await delete.ExecuteNonQueryAsync(ct);
+        // Foreign keys cascade comments, history and reviews; source keys and release snapshots remain.
+        await tx.CommitAsync(ct);
+        return new { deleted, localeCode = locale };
+    }
+
+    private static async Task LockManagerMutationAsync(MySqlConnection cn, MySqlTransaction tx, long projectId, long managerId, CancellationToken ct)
+    {
+        // Same lock order as membership/admin writes; recheck authority inside the transaction.
+        await SystemAdminGuard.LockAsync(cn, tx, ct);
+        await ProjectWriteLock.AcquireAsync(cn, tx, projectId, ct);
+        await using var cmd = cn.CreateCommand();
+        cmd.Transaction = tx;
+        cmd.CommandText = @"SELECT pm.role FROM project_members pm JOIN users u ON u.id=pm.user_id
+WHERE pm.project_id=@project AND pm.user_id=@manager AND u.is_active=1 FOR UPDATE";
+        cmd.Parameters.AddWithValue("@project", projectId);
+        cmd.Parameters.AddWithValue("@manager", managerId);
+        if (Convert.ToString(await cmd.ExecuteScalarAsync(ct)) != ProjectRole.Manager)
+            throw ApiException.Forbidden("Chỉ Manager của dự án được thêm hàng loạt hoặc xóa bản dịch.");
+    }
+
     // ===================== Bình luận / lịch sử =====================
 
     public async Task<object> AddCommentAsync(long projectId, long translationId, long userId, string? body, CancellationToken ct = default)
@@ -452,7 +575,7 @@ WHERE h.translation_id=@id ORDER BY h.id DESC LIMIT 100";
     {
         await using var cmd = cn.CreateCommand();
         cmd.Transaction = tx;
-        cmd.CommandText = "SELECT u.display_name,pm.role FROM project_members pm JOIN users u ON u.id=pm.user_id WHERE pm.project_id=@project AND pm.user_id=@user";
+        cmd.CommandText = "SELECT u.display_name,pm.role FROM project_members pm JOIN users u ON u.id=pm.user_id WHERE pm.project_id=@project AND pm.user_id=@user AND u.is_active=1";
         cmd.Parameters.AddWithValue("@project", projectId);
         cmd.Parameters.AddWithValue("@user", userId);
         await using var rd = await cmd.ExecuteReaderAsync(ct);

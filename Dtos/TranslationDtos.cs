@@ -14,6 +14,11 @@ public sealed record AssignTranslationRequest(long? UserId, int ExpectedRowVersi
 /// <summary>Phân công nhiều khóa cùng lúc, kể cả khóa chưa có bản dịch.</summary>
 public sealed record BulkAssignRequest(string? LocaleCode, long[]? StringIds, long? UserId);
 
+public sealed record CreateMissingTranslationsRequest(string? LocaleCode);
+public sealed record DeleteTranslationRequest(int ExpectedRowVersion);
+public sealed record TranslationDeleteItem(long TranslationId, int ExpectedRowVersion);
+public sealed record BulkDeleteTranslationsRequest(string? LocaleCode, TranslationDeleteItem[]? Items);
+
 public sealed record AddCommentRequest(string? Body);
 public sealed record ReviewRequest(string? Note, int ExpectedRowVersion);
 

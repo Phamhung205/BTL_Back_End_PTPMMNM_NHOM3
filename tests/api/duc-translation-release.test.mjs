@@ -72,7 +72,7 @@ test(`chuẩn bị dữ liệu (backend: ${BASE})`, async () => {
   }
   for (const [user, role] of [[ctx.tr1, 'translator'], [ctx.tr2, 'translator'], [ctx.rev, 'reviewer']]) {
     r = await m.post(`${ctx.base}/members`, { userId: user.id, role });
-    assert.equal(r.status, 200, show(r));
+    assert.equal(r.status, 201, show(r));
   }
 
   r = await m.post(`${ctx.base}/source-versions/import`, { versionName: 'source-1.0.0', data: SOURCE_V1 });

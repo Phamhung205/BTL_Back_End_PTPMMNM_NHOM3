@@ -8,6 +8,9 @@ CREATE TABLE IF NOT EXISTS users (
   display_name VARCHAR(120) NOT NULL,
   password_hash VARCHAR(255) NOT NULL,
   password_salt VARCHAR(255) NOT NULL,
+  system_role ENUM('user','admin') NOT NULL DEFAULT 'user',
+  is_active TINYINT(1) NOT NULL DEFAULT 1,
+  security_version INT NOT NULL DEFAULT 1,
   created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
 ) ENGINE=InnoDB;
 
@@ -174,3 +177,18 @@ CREATE TABLE IF NOT EXISTS release_files (
   CONSTRAINT fk_rf_release FOREIGN KEY(release_id) REFERENCES releases(id) ON DELETE CASCADE,
   CONSTRAINT fk_rf_locale FOREIGN KEY(locale_code) REFERENCES locales(code) ON DELETE RESTRICT
 ) ENGINE=InnoDB;
+
+CREATE TABLE IF NOT EXISTS system_admin_guard (id TINYINT UNSIGNED PRIMARY KEY) ENGINE=InnoDB;
+INSERT IGNORE INTO system_admin_guard(id) VALUES(1);
+CREATE TABLE IF NOT EXISTS admin_audit (
+  id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+  actor_id BIGINT UNSIGNED NULL,
+  action VARCHAR(60) NOT NULL,
+  target_type VARCHAR(30) NOT NULL,
+  target_id BIGINT UNSIGNED NULL,
+  summary TEXT NOT NULL,
+  created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  INDEX idx_admin_audit_date(created_at,id),
+  CONSTRAINT fk_admin_audit_actor FOREIGN KEY(actor_id) REFERENCES users(id) ON DELETE SET NULL
+) ENGINE=InnoDB;
+

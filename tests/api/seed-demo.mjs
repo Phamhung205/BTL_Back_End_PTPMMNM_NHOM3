@@ -39,7 +39,7 @@ const base = `/api/projects/${projectId}`;
 
 for (const code of ['en', 'zh']) expect(await m.post(`${base}/locales`, { localeCode: code }), [200, 409], `Gắn ngôn ngữ ${code}`);
 for (const [user, role] of [[translator, 'translator'], [translator2, 'translator'], [reviewer, 'reviewer']]) {
-  expect(await m.post(`${base}/members`, { userId: user.id, role }), [200], `Thêm ${user.email}`);
+  expect(await m.post(`${base}/members`, { userId: user.id, role }), [201, 409], `Thêm ${user.email}`);
 }
 expect(await m.post(`${base}/source-versions/import`, { versionName: 'source-1.0.0', data: SOURCE }), [200, 409], 'Import nguồn');
 

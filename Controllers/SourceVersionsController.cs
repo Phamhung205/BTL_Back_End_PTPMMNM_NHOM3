@@ -18,7 +18,8 @@ public sealed class SourceVersionsController(ProjectAccessService access, Source
     }
 
     [HttpPost("import")]
-    [RequestSizeLimit(2 * 1024 * 1024 + 8192)]
+    // rawJson can double in size when quotes/backslashes are escaped in the envelope.
+    [RequestSizeLimit(4 * 1024 * 1024 + 8192)]
     public async Task<IActionResult> Import(long projectId, ImportSourceRequest request, CancellationToken ct)
     {
         var userId=User.UserId();

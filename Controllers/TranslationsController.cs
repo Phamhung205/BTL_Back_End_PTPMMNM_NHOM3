@@ -16,8 +16,8 @@ public sealed class TranslationsController(ProjectAccessService access, Translat
     public async Task<IActionResult> List(long projectId,[FromQuery]string? locale,[FromQuery]string? q,[FromQuery]string? status,[FromQuery]string? assignee,CancellationToken ct)
     {
         var userId=User.UserId();
-        await access.GetRoleAsync(projectId,userId,ct);
-        return Ok(await translations.ListAsync(projectId,userId,locale,q,status,assignee,ct));
+        var role = await access.GetRoleAsync(projectId,userId,ct);
+        return Ok(await translations.ListAsync(projectId,userId,role,locale,q,status,assignee,ct));
     }
 
     [HttpGet("stats")]
@@ -44,6 +44,30 @@ public sealed class TranslationsController(ProjectAccessService access, Translat
         var userId=User.UserId();
         await access.RequireManagerAsync(projectId,userId,ct);
         return Ok(await translations.AssignAsync(projectId,userId,translationId,request.UserId,request.ExpectedRowVersion,ct));
+    }
+
+    [HttpPost("create-missing")]
+    public async Task<IActionResult> CreateMissing(long projectId, CreateMissingTranslationsRequest request, CancellationToken ct)
+    {
+        var userId = User.UserId();
+        await access.RequireManagerAsync(projectId, userId, ct);
+        return Ok(await translations.CreateMissingAsync(projectId, userId, request.LocaleCode, ct));
+    }
+
+    [HttpDelete("{translationId:long}")]
+    public async Task<IActionResult> Delete(long projectId, long translationId, DeleteTranslationRequest request, CancellationToken ct)
+    {
+        var userId = User.UserId();
+        await access.RequireManagerAsync(projectId, userId, ct);
+        return Ok(await translations.DeleteAsync(projectId, userId, translationId, request.ExpectedRowVersion, ct));
+    }
+
+    [HttpDelete]
+    public async Task<IActionResult> BulkDelete(long projectId, BulkDeleteTranslationsRequest request, CancellationToken ct)
+    {
+        var userId = User.UserId();
+        await access.RequireManagerAsync(projectId, userId, ct);
+        return Ok(await translations.BulkDeleteAsync(projectId, userId, request, ct));
     }
 
     /// <summary>Phân công nhiều khóa (kể cả khóa chưa có bản dịch) cho một người dịch.</summary>

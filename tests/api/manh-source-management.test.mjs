@@ -44,7 +44,7 @@ test('chuẩn bị hai dự án, ba ngôn ngữ và các vai trò', async () => 
   ctx.base = '/api/projects/' + first.id; ctx.other = '/api/projects/' + second.id;
   for (const base of [ctx.base, ctx.other]) expect(await post(base + '/locales', { localeCode: 'en' }), 200);
   expect(await post(ctx.base + '/locales', { localeCode: 'zh' }), 200);
-  expect(await post(ctx.base + '/members', { userId: ctx.translator.id, role: 'translator' }), 200);
+  expect(await post(ctx.base + '/members', { userId: ctx.translator.id, role: 'translator' }), 201);
 });
 
 test('quyền API: chưa đăng nhập, ngoài dự án, translator chỉ đọc', async () => {
