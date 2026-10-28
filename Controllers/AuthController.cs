@@ -3,13 +3,16 @@ using Microsoft.AspNetCore.Authorization;
 using TranslationManager.Api.Data;
 using TranslationManager.Api.Dtos;
 using TranslationManager.Api.Support;
+using TranslationManager.Api.Services;
 
 namespace TranslationManager.Api.Controllers;
 
 [ApiController]
 [Route("api/auth")]
-public sealed class AuthController(Db db, PasswordHasher hasher, JwtTokenService jwt) : ControllerBase
+public sealed class AuthController(Db db, PasswordHasher hasher, JwtTokenService jwt, AccessService access) : ControllerBase
 {
+    [Authorize, HttpGet("permissions"), ResponseCache(NoStore = true, Location = ResponseCacheLocation.None)]
+    public async Task<IActionResult> Permissions(CancellationToken ct) => Ok(await access.ForUserAsync(User.UserId(), ct));
     [HttpPost("register")]
     public async Task<ActionResult<AuthResponse>> Register(RegisterRequest request, CancellationToken ct)
     {

@@ -52,6 +52,10 @@ public sealed class TranslationService(Db db)
         else if (assigneeText == "none") assigneeFilter = -1;
         else if (assigneeText.Length > 0 && (!long.TryParse(assigneeText, out assigneeFilter) || assigneeFilter <= 0))
             throw ApiException.BadRequest("Bộ lọc người được phân công không hợp lệ.");
+        if (assigneeFilter > 0 && role != ProjectRole.Manager && assigneeFilter != currentUserId)
+            throw ApiException.Forbidden("Chỉ Manager mới được lọc theo thành viên khác trong dự án.");
+        // Translator accounts only receive their assigned rows; unassigned work remains with the Manager to distribute.
+        if (role == ProjectRole.Translator) assigneeFilter = currentUserId;
 
         await using var cn = await db.OpenAsync(ct);
         var localeCode = await RequireTargetLocaleAsync(cn, null, projectId, locale, ct);
@@ -93,7 +97,7 @@ ORDER BY ss.key_path";
                 status = rd.GetString(5),
                 assignedTo = rd.IsDBNull(6) ? (long?)null : rd.GetInt64(6),
                 assignedToName = rd.IsDBNull(7) ? null : rd.GetString(7),
-                canEdit = role == ProjectRole.Manager || (role == ProjectRole.Translator && (rd.IsDBNull(6) || rd.GetInt64(6) == currentUserId)),
+                canEdit = role == ProjectRole.Manager || (role == ProjectRole.Translator && !rd.IsDBNull(6) && rd.GetInt64(6) == currentUserId),
                 rowVersion = rd.IsDBNull(8) ? 0 : rd.GetInt32(8),
                 updatedAt = rd.IsDBNull(9) ? (DateTime?)null : rd.GetDateTime(9),
                 updatedByName = rd.IsDBNull(10) ? null : rd.GetString(10),
@@ -178,6 +182,8 @@ ORDER BY pl.locale_code";
 
             var current = await LockAsync(cn, tx, projectId, "t.string_id=@string AND t.locale_code=@locale",
                 p => { p.AddWithValue("@string", request.StringId); p.AddWithValue("@locale", locale); }, ct);
+            if (role == ProjectRole.Translator && (current is null || current.AssignedTo != userId))
+                throw ApiException.Forbidden("Bạn chỉ được dịch các khóa đã được Manager giao cho tài khoản của mình.");
 
             long id;
             int newVersion;
@@ -218,6 +224,7 @@ WHERE id=@id AND row_version=@expected";
             }
 
             await AddHistoryAsync(cn, tx, id, userId, status == TranslationStatus.Draft ? "saved_draft" : "submitted", current?.Value, value, ct);
+            await TranslationMemoryService.CaptureForStringAsync(cn, tx, request.StringId, ct);
             await tx.CommitAsync(ct);
             return new { id, stringId = request.StringId, localeCode = locale, value, status, rowVersion = newVersion, placeholderCheck = check };
         }
@@ -552,6 +559,55 @@ WHERE h.translation_id=@id ORDER BY h.id DESC LIMIT 100";
         return new { translationId = row.Id, status = newStatus, rowVersion = row.RowVersion + 1 };
     }
 
+    public async Task<object> BulkApproveAsync(long projectId, long reviewerId, BulkApproveRequest request, CancellationToken ct = default)
+    {
+        var items = request.Items ?? [];
+        if (items.Length is < 1 or > 1000) throw ApiException.BadRequest("Chọn từ 1 đến 1.000 bản dịch chờ duyệt.");
+        if (items.Any(item => item.TranslationId <= 0 || item.ExpectedRowVersion < 1))
+            throw ApiException.BadRequest("Danh sách bản dịch hoặc phiên bản không hợp lệ.");
+        if (items.Select(item => item.TranslationId).Distinct().Count() != items.Length)
+            throw ApiException.BadRequest("Danh sách có bản dịch bị lặp.");
+
+        await using var cn = await db.OpenAsync(ct);
+        await using var tx = await cn.BeginTransactionAsync(ct);
+        var results = new List<object>(items.Length);
+        foreach (var item in items.OrderBy(item => item.TranslationId))
+        {
+            var row = await LockByIdAsync(cn, tx, projectId, item.TranslationId, ct)
+                ?? throw ApiException.NotFound("Không tìm thấy một bản dịch đã chọn.");
+            if (row.SourceStatus != "active") throw ApiException.BadRequest("Một khóa nguồn đã bị xóa, không thể duyệt.");
+            if (row.RowVersion != item.ExpectedRowVersion)
+                throw ConflictFor(row, "Một bản dịch đã thay đổi trước khi duyệt hàng loạt. Hãy tải lại danh sách.");
+            if (row.Value is null || row.Status != TranslationStatus.Translated)
+                throw ApiException.BadRequest("Chỉ duyệt được bản dịch có nội dung đang ở trạng thái chờ duyệt.");
+            var check = PlaceholderValidator.Check(row.SourceText, row.Value);
+            if (!check.Ok) throw ApiException.BadRequest("Không thể duyệt vì biến thay thế không khớp chuỗi nguồn.", check);
+
+            await using (var cmd = cn.CreateCommand())
+            {
+                cmd.Transaction = tx;
+                cmd.CommandText = "UPDATE translations SET status=@status,row_version=row_version+1,updated_at=updated_at WHERE id=@id AND row_version=@expected";
+                cmd.Parameters.AddWithValue("@status", TranslationStatus.Approved);
+                cmd.Parameters.AddWithValue("@id", row.Id);
+                cmd.Parameters.AddWithValue("@expected", item.ExpectedRowVersion);
+                if (await cmd.ExecuteNonQueryAsync(ct) == 0) throw ConflictFor(row);
+            }
+            await using (var cmd = cn.CreateCommand())
+            {
+                cmd.Transaction = tx;
+                cmd.CommandText = "INSERT INTO reviews(translation_id,reviewer_id,decision,note) VALUES(@id,@user,'approved',NULL)";
+                cmd.Parameters.AddWithValue("@id", row.Id);
+                cmd.Parameters.AddWithValue("@user", reviewerId);
+                await cmd.ExecuteNonQueryAsync(ct);
+            }
+            await AddHistoryAsync(cn, tx, row.Id, reviewerId, "approved", null, null, ct);
+            results.Add(new { translationId = row.Id, status = TranslationStatus.Approved, rowVersion = row.RowVersion + 1 });
+        }
+
+        await tx.CommitAsync(ct);
+        return new { approved = results.Count, items = results };
+    }
+
     // ===================== Helpers =====================
 
     private static async Task<string> RequireTargetLocaleAsync(MySqlConnection cn, MySqlTransaction? tx, long projectId, string? locale, CancellationToken ct)
@@ -580,8 +636,8 @@ WHERE h.translation_id=@id ORDER BY h.id DESC LIMIT 100";
         cmd.Parameters.AddWithValue("@user", userId);
         await using var rd = await cmd.ExecuteReaderAsync(ct);
         if (!await rd.ReadAsync(ct)) throw ApiException.BadRequest("Người được phân công không thuộc dự án.");
-        if (rd.GetString(1) is not (ProjectRole.Translator or ProjectRole.Manager))
-            throw ApiException.BadRequest("Chỉ phân công cho thành viên có vai trò translator hoặc manager.");
+        if (rd.GetString(1) != ProjectRole.Translator)
+            throw ApiException.BadRequest("Chỉ phân công cho thành viên có vai trò người dịch (translator).");
         return rd.GetString(0);
     }
 
@@ -615,8 +671,8 @@ FOR UPDATE";
 
     private static void EnsureCanEdit(TranslationRow row, long userId, string role)
     {
-        if (role == ProjectRole.Translator && row.AssignedTo is not null && row.AssignedTo != userId)
-            throw ApiException.Forbidden($"Chuỗi này đã được phân công cho {row.AssignedToName ?? "người dịch khác"}.");
+        if (role == ProjectRole.Translator && row.AssignedTo != userId)
+            throw ApiException.Forbidden("Bạn chỉ được dịch các khóa đã được Manager giao cho tài khoản của mình.");
     }
 
     private static ApiException ConflictFor(TranslationRow row, string message = "Có người khác đã sửa bản dịch này. Hệ thống không ghi đè âm thầm — hãy xem bản mới nhất.") =>

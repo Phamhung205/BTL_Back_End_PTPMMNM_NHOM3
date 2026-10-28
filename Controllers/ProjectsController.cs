@@ -15,6 +15,14 @@ public sealed class ProjectsController(ProjectService projects, ProjectAccessSer
     [HttpGet]
     public async Task<IActionResult> Mine(CancellationToken ct) => Ok(await projects.MineAsync(User.UserId(), ct));
 
+    [HttpGet("{projectId:long}/permissions"), ResponseCache(NoStore = true, Location = ResponseCacheLocation.None)]
+    public async Task<IActionResult> Permissions(long projectId, CancellationToken ct)
+    {
+        var role = await access.GetRoleAsync(projectId, User.UserId(), ct);
+        return Ok(new { projectId, role, permissions = PermissionCatalog.ProjectPermissions(role),
+            translationEditScope = role == ProjectRole.Manager ? "all" : role == ProjectRole.Translator ? "assigned_only" : "none" });
+    }
+
     [HttpPost]
     public async Task<IActionResult> Create(CreateProjectRequest request, CancellationToken ct)
     {

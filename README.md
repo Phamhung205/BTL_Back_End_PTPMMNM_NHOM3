@@ -142,7 +142,7 @@ Không được sửa/gỡ ngôn ngữ nguồn. Không xóa locale dùng chung k
 
 - JSON object lồng nhau, giá trị chuỗi, tối đa 2 MB; tên phiên bản 1–120 ký tự và không trùng trong dự án.
 - Khóa phân biệt hoa/thường và dấu: `Title`, `title`, `ten`, `tên` là bốn khóa độc lập.
-- Tên khóa không rỗng, không có khoảng trắng đầu/cuối, không chứa dấu chấm; đường dẫn tối đa 500 ký tự, chuỗi tối đa 10000 ký tự. Không hỗ trợ mảng, số, boolean, null, object rỗng hoặc thuộc tính JSON bị lặp. Giới hạn độ sâu theo System.Text.Json mặc định là 64.
+- Tên khóa không rỗng, không có khoảng trắng đầu/cuối, cho phép dấu chấm làm dấu phân cấp (a.b tương đương a → b), từ chối đường dẫn trùng hoặc xung đột cha/con; đường dẫn tối đa 500 ký tự, chuỗi tối đa 10000 ký tự. Không hỗ trợ mảng, số, boolean, null, object rỗng hoặc thuộc tính JSON bị lặp. Giới hạn độ sâu theo System.Text.Json mặc định là 64.
 - Mỗi tệp là **toàn bộ snapshot nguồn**. Khóa vắng mặt được đánh dấu `deleted`; khóa quay lại dùng lại ID và ghi change `restored`. Lịch sử, snapshot và nội dung bản dịch được giữ nguyên.
 - Nhập lại cùng nội dung dưới tên phiên bản mới không nhân đôi khóa và không thay trạng thái/row_version của bản dịch không liên quan.
 - Nguồn sửa/xóa/khôi phục làm tăng `row_version` của mọi bản dịch liên quan. Nháp vẫn là `draft`; các trạng thái khác thành `needs_review`. Client đang giữ bản nháp cũ phải tải lại trước khi lưu.
@@ -271,3 +271,10 @@ Admin quản lý tài khoản, khóa/mở, vai trò hệ thống, toàn bộ d�
 Admin đầu tiên được tạo bằng CLI --bootstrap-admin với BootstrapAdmin__Email, BootstrapAdmin__DisplayName, BootstrapAdmin__Password (12+ ký tự), connection string và JWT phù hợp. Lệnh không cấp thêm Admin nếu đã có Admin, không có bootstrap API công khai.
 
 Frontend có prepare-demo.ps1 và test-all.ps1. Bộ demo dùng translation_manager_demo ở MariaDB riêng cổng 3307. Hướng dẫn và tài khoản demo: DEMO_GUIDE.md trong Frontend. Không áp dụng mật khẩu demo vào hệ thống thật.
+
+
+## Bổ sung ngày 28/10/2026
+
+POST /api/projects nhận thêm targetLocaleCodes và members (email hoặc userId, role); tạo dự án, ngôn ngữ và thành viên trong cùng transaction. Payload cũ vẫn hoạt động. GET /api/projects/{id}/releases/report trả báo cáo điều kiện hiện tại và lịch sử phát hành. --create-local-admin chỉ tạo Admin bằng CLI với CSDL localhost; thông tin lấy từ biến BootstrapAdmin, không có endpoint công khai cấp Admin.
+
+Frontend có hướng dẫn và ví dụ tại docs/HUONG_DAN_NHOM.md, tests/project-onboarding.mjs và examples/website. Bản dịch mẫu có hai dự án 1.010 / 170 khóa, en/vi/zh, hai source version và hai release phục vụ tình huống 2.

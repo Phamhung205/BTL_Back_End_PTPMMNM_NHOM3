@@ -79,8 +79,10 @@ File 02 không xóa các dòng dữ liệu hiện có và có thể chạy lại
 | `reviews` | Quyết định duyệt/từ chối, Reviewer, ghi chú và thời điểm. | Trang Đánh giá, lý do từ chối, nhận xét đánh giá gần nhất. |
 | `releases` | Phiên bản phát hành, nguồn được dùng, ghi chú, người/ngày phát hành, số khóa. | Tạo và liệt kê bản phát hành. |
 | `release_files` | Nội dung JSON đã chốt cho mỗi ngôn ngữ, tên file, SHA-256, số khóa. | Tải JSON/ZIP; giữ nội dung bản phát hành cũ khi bản dịch thay đổi. |
+| `release_api_keys` | SHA-256 của key chỉ đọc, một key hiện hành trên mỗi release; key thô chỉ trả một lần khi tạo/đổi. | Cấp quyền cho website khách đọc file JSON của đúng snapshot đã phát hành. |
 | `system_admin_guard` | Một hàng khóa kỹ thuật có `id=1`, dùng trong giao dịch quản trị. | Ngăn các thao tác đồng thời làm mất Admin/Manager đang hoạt động cuối cùng. Không phải bảng danh sách Admin. |
 | `admin_audit` | Admin thực hiện, hành động, đối tượng, nội dung thay đổi và thời điểm. | Nhật ký quản trị hệ thống; vẫn còn khi dự án bị xóa. |
+| `translation_memory` | Cặp câu tiếng Việt và bản dịch đích đã gửi/duyệt; khóa băm chống trùng. Không lưu người dịch hoặc mã dự án. | Kho bản dịch dùng chung, tìm kiếm theo câu và ngôn ngữ đích. |
 
 Ảnh có 15 bảng đầu; hai bảng cuối là phần bổ sung cho Admin.
 
@@ -93,3 +95,6 @@ File 02 không xóa các dòng dữ liệu hiện có và có thể chạy lại
 - Thêm ngôn ngữ vào `locales` là thêm danh mục. Gắn vào `project_locales` mới làm ngôn ngữ xuất hiện trong dự án. Hệ thống không tự tạo nội dung dịch.
 - Dashboard và lịch sử tổng hợp lấy dữ liệu từ các bảng nghiệp vụ, không cần bảng Dashboard hay bảng lịch sử tổng hợp riêng.
 - Khi phát hành, nội dung được chốt vào `release_files`; gói ZIP được Backend tạo từ các nội dung này. File SQL chứa đủ nội dung JSON của release demo.
+- Nâng CSDL đang dùng bằng `migrations/006_release_read_api.sql` để thêm API key khách hàng. Key chỉ đọc JSON của một release; tạo key mới sẽ thu hồi key cũ của release đó.
+- Kho dùng chung chỉ đề xuất nội dung đã gửi (`translated`) hoặc đã duyệt (`approved`); bản nháp không xuất hiện. Cài mới có bảng trong `schema.sql`; CSDL đang dùng nâng cấp bằng `migrations/005_translation_memory.sql`.
+- Bộ dữ liệu mẫu phổ thông bổ sung 1.000 cặp tiếng Việt cho mỗi ngôn ngữ `de`, `es`, `fr`, `ja`, `ko`, `pt`, `ru`, `th` nằm trong `seeds/translation_memory_common_web.sql`. Tiếng Anh và tiếng Trung đã có ít nhất 1.000 cặp trong dữ liệu hiện tại. Nguồn cụm từ giao diện tham khảo là bộ MIT `deviro/common-ui-translations`; xem chú thích đầu file seed và chạy lại script tạo seed nếu cần.

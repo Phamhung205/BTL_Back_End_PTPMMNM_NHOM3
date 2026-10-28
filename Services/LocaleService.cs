@@ -10,7 +10,7 @@ public sealed partial class LocaleService(Db db)
     [GeneratedRegex(@"^[A-Za-z]{2,3}(?:-[A-Za-z0-9]{2,8})*$")]
     private static partial Regex LocaleRegex();
 
-    private static string NormalizeCode(string? value)
+    internal static string NormalizeCode(string? value)
     {
         var code = (value ?? "").Trim();
         if (code.Length > 20 || !LocaleRegex().IsMatch(code))

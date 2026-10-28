@@ -7,8 +7,29 @@ using TranslationManager.Api.Support;
 namespace TranslationManager.Api.Controllers;
 
 [ApiController, Authorize(Policy = "SystemAdmin"), Route("api/admin")]
-public sealed class AdminController(AdminService admin, ProjectService projects) : ControllerBase
+[ResponseCache(NoStore = true, Location = ResponseCacheLocation.None)]
+public sealed class AdminController(AdminService admin, ProjectService projects, AccessService access) : ControllerBase
 {
+    [HttpGet("roles")]
+    public IActionResult Roles() => Ok(new { version = 1, systemRoles = PermissionCatalog.SystemRoles, projectRoles = PermissionCatalog.ProjectRoles });
+    [HttpGet("permissions")]
+    public IActionResult Permissions() => Ok(new { version = 1, items = PermissionCatalog.Permissions });
+    [HttpGet("users/find")]
+    public async Task<IActionResult> FindUser([FromQuery] string? email, CancellationToken ct) => Ok(await admin.FindByEmailAsync(email, ct));
+    [HttpGet("users/{userId:long}")]
+    public async Task<IActionResult> UserDetail(long userId, CancellationToken ct) => Ok(await admin.UserAsync(userId, ct));
+    [HttpGet("users/{userId:long}/permissions")]
+    public async Task<IActionResult> UserPermissions(long userId, CancellationToken ct) => Ok(await access.ForUserAsync(userId, ct));
+    [HttpPost("users")]
+    public async Task<IActionResult> CreateUser(CreateSystemUserRequest request, CancellationToken ct)
+    {
+        var user = await admin.CreateUserAsync(User.UserId(), request, ct);
+        return Created($"/api/admin/users/{user.Id}", user);
+    }
+    [HttpPut("users/{userId:long}/role")]
+    public async Task<IActionResult> SetRole(long userId, ChangeSystemRoleRequest request, CancellationToken ct) => Ok(await admin.SetRoleAsync(User.UserId(), userId, request, ct));
+    [HttpPut("users/{userId:long}/status")]
+    public async Task<IActionResult> SetStatus(long userId, ChangeUserStatusRequest request, CancellationToken ct) => Ok(await admin.SetStatusAsync(User.UserId(), userId, request, ct));
     [HttpGet("stats")]
     public async Task<IActionResult> Stats(CancellationToken ct) => Ok(await admin.StatsAsync(ct));
     [HttpGet("users")]

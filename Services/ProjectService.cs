@@ -27,11 +27,15 @@ WHERE pm.user_id=@user ORDER BY p.id DESC";
 
     public async Task<long> CreateAsync(long userId, CreateProjectRequest request, CancellationToken ct = default)
     {
-        var name = request.Name.Trim();
-        var slug = request.Slug.Trim().ToLowerInvariant();
-        var sourceLocale = request.SourceLocaleCode.Trim();
+        var name = (request.Name ?? "").Trim();
+        var slug = (request.Slug ?? "").Trim().ToLowerInvariant();
+        var sourceLocale = LocaleService.NormalizeCode(request.SourceLocaleCode);
         ValidateProject(name, slug);
-        if (sourceLocale.Length is < 2 or > 20) throw ApiException.BadRequest("Mã ngôn ngữ nguồn không hợp lệ.");
+        var targets = (request.TargetLocaleCodes ?? []).Select(LocaleService.NormalizeCode).ToArray();
+        if (targets.Length > 20 || targets.Distinct(StringComparer.Ordinal).Count() != targets.Length || targets.Contains(sourceLocale))
+            throw ApiException.BadRequest("Chọn tối đa 20 ngôn ngữ đích khác nhau và khác ngôn ngữ nguồn.");
+        var initialMembers = request.Members ?? [];
+        if (initialMembers.Length > 100) throw ApiException.BadRequest("Tối đa 100 thành viên khi tạo dự án.");
 
         await using var cn = await db.OpenAsync(ct);
         await using var tx = await cn.BeginTransactionAsync(ct);
@@ -63,6 +67,40 @@ INSERT INTO project_locales(project_id,locale_code,is_source) VALUES(@project,@c
         member.Parameters.AddWithValue("@project", projectId);
         member.Parameters.AddWithValue("@user", userId);
         await member.ExecuteNonQueryAsync(ct);
+
+        foreach (var code in targets)
+        {
+            await using var target = cn.CreateCommand();
+            target.Transaction = tx;
+            target.CommandText = "INSERT IGNORE INTO locales(code,name) VALUES(@code,@code); INSERT INTO project_locales(project_id,locale_code,is_source) VALUES(@project,@code,0);";
+            target.Parameters.AddWithValue("@project", projectId);
+            target.Parameters.AddWithValue("@code", code);
+            await target.ExecuteNonQueryAsync(ct);
+        }
+        var memberIds = new HashSet<long> { userId };
+        foreach (var initialMember in initialMembers)
+        {
+            if (initialMember is null || !Models.ProjectRole.All.Contains(initialMember.Role))
+                throw ApiException.BadRequest("Vai trò thành viên phải là manager, translator hoặc reviewer.");
+            await using var findUser = cn.CreateCommand();
+            findUser.Transaction = tx;
+            findUser.CommandText = initialMember.UserId.HasValue
+                ? "SELECT id FROM users WHERE id=@user AND is_active=1"
+                : "SELECT id FROM users WHERE email=@email AND is_active=1";
+            findUser.Parameters.AddWithValue("@user", initialMember.UserId);
+            findUser.Parameters.AddWithValue("@email", (initialMember.Email ?? "").Trim().ToLowerInvariant());
+            var found = await findUser.ExecuteScalarAsync(ct);
+            if (found is null) throw ApiException.BadRequest("Thành viên chưa đăng ký hoặc đã bị khóa: " + (initialMember.Email ?? initialMember.UserId?.ToString()));
+            var memberId = Convert.ToInt64(found);
+            if (!memberIds.Add(memberId)) throw ApiException.BadRequest("Thành viên bị lặp; người tạo đã tự động là Manager.");
+            await using var add = cn.CreateCommand();
+            add.Transaction = tx;
+            add.CommandText = "INSERT INTO project_members(project_id,user_id,role) VALUES(@project,@user,@role)";
+            add.Parameters.AddWithValue("@project", projectId);
+            add.Parameters.AddWithValue("@user", memberId);
+            add.Parameters.AddWithValue("@role", initialMember.Role);
+            await add.ExecuteNonQueryAsync(ct);
+        }
 
         await tx.CommitAsync(ct);
         return projectId;

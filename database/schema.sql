@@ -114,6 +114,22 @@ CREATE TABLE IF NOT EXISTS translations (
   CONSTRAINT fk_t_updated_by FOREIGN KEY(updated_by) REFERENCES users(id) ON DELETE RESTRICT
 ) ENGINE=InnoDB;
 
+-- Shared Vietnamese-first translation memory. This table intentionally has no user/project identity.
+CREATE TABLE IF NOT EXISTS translation_memory (
+  id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+  source_locale_code VARCHAR(20) NOT NULL DEFAULT 'vi',
+  target_locale_code VARCHAR(20) NOT NULL,
+  source_text TEXT NOT NULL,
+  target_text TEXT NOT NULL,
+  source_hash CHAR(64) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,
+  target_hash CHAR(64) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,
+  created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  UNIQUE KEY uq_translation_memory_pair(target_locale_code, source_hash, target_hash),
+  INDEX idx_translation_memory_search(target_locale_code, source_hash),
+  CONSTRAINT fk_tm_source_locale FOREIGN KEY(source_locale_code) REFERENCES locales(code) ON DELETE RESTRICT,
+  CONSTRAINT fk_tm_target_locale FOREIGN KEY(target_locale_code) REFERENCES locales(code) ON DELETE RESTRICT
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
 CREATE TABLE IF NOT EXISTS translation_comments (
   id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
   translation_id BIGINT UNSIGNED NOT NULL,
@@ -176,6 +192,18 @@ CREATE TABLE IF NOT EXISTS release_files (
   UNIQUE(release_id,locale_code),
   CONSTRAINT fk_rf_release FOREIGN KEY(release_id) REFERENCES releases(id) ON DELETE CASCADE,
   CONSTRAINT fk_rf_locale FOREIGN KEY(locale_code) REFERENCES locales(code) ON DELETE RESTRICT
+) ENGINE=InnoDB;
+
+-- API key chỉ đọc nội dung của một snapshot phát hành; chỉ lưu SHA-256, key thô hiển thị một lần.
+CREATE TABLE IF NOT EXISTS release_api_keys (
+  release_id BIGINT UNSIGNED PRIMARY KEY,
+  key_hash CHAR(64) NOT NULL,
+  key_prefix VARCHAR(24) NOT NULL,
+  created_by BIGINT UNSIGNED NOT NULL,
+  created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  revoked_at TIMESTAMP NULL,
+  CONSTRAINT fk_release_api_key_release FOREIGN KEY(release_id) REFERENCES releases(id) ON DELETE CASCADE,
+  CONSTRAINT fk_release_api_key_user FOREIGN KEY(created_by) REFERENCES users(id) ON DELETE RESTRICT
 ) ENGINE=InnoDB;
 
 CREATE TABLE IF NOT EXISTS system_admin_guard (id TINYINT UNSIGNED PRIMARY KEY) ENGINE=InnoDB;

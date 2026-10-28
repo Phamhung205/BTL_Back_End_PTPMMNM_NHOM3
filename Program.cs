@@ -22,6 +22,8 @@ builder.Services.AddScoped<SourceVersionService>();
 builder.Services.AddScoped<TranslationService>();
 builder.Services.AddScoped<ReleaseService>();
 builder.Services.AddScoped<AdminService>();
+builder.Services.AddScoped<AccessService>();
+builder.Services.AddScoped<TranslationMemoryService>();
 
 var jwtKey = builder.Configuration["Jwt:Key"];
 if (string.IsNullOrWhiteSpace(jwtKey) && builder.Environment.IsDevelopment())
@@ -85,25 +87,38 @@ var origins = (builder.Configuration["FrontendOrigins"] ?? "http://localhost:808
 
 builder.Services.AddCors(options =>
 {
-    options.AddPolicy("Frontend", policy =>
+    options.AddDefaultPolicy(policy =>
         policy.WithOrigins(origins)
               .AllowAnyHeader()
               .AllowAnyMethod()
               .WithExposedHeaders("Content-Disposition", "X-Content-SHA256"));
+    // Public translation is already-approved immutable content; keys can read only one release.
+    options.AddPolicy("PublicTranslationApi", policy =>
+        policy.AllowAnyOrigin()
+              .AllowAnyHeader()
+              .AllowAnyMethod()
+              .WithExposedHeaders("X-Content-SHA256"));
 });
 
 var app = builder.Build();
 
-if (args.Contains("--bootstrap-admin", StringComparer.Ordinal))
+if (args.Contains("--bootstrap-admin", StringComparer.Ordinal) || args.Contains("--create-local-admin", StringComparer.Ordinal))
 {
+    var additional = args.Contains("--create-local-admin", StringComparer.Ordinal);
+    if (additional)
+    {
+        var connection = new MySqlConnector.MySqlConnectionStringBuilder(builder.Configuration.GetConnectionString("Default") ?? throw new InvalidOperationException("Missing Default connection string."));
+        if (connection.Server is not ("127.0.0.1" or "localhost" or "::1"))
+            throw new InvalidOperationException("--create-local-admin is restricted to a local database.");
+    }
     using var scope = app.Services.CreateScope();
-    await scope.ServiceProvider.GetRequiredService<AdminService>().BootstrapAsync(builder.Configuration);
+    await scope.ServiceProvider.GetRequiredService<AdminService>().BootstrapAsync(builder.Configuration, allowAdditional: additional);
     Console.WriteLine("System admin bootstrap completed.");
     return;
 }
 
 app.UseMiddleware<ApiExceptionMiddleware>();
-app.UseCors("Frontend");
+app.UseCors();
 app.UseAuthentication();
 app.UseAuthorization();
 

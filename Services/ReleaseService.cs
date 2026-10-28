@@ -257,6 +257,64 @@ WHERE r.id=@release AND r.project_id=@project AND rf.locale_code=@locale";
         return (rd.GetString(0), bytes, sha);
     }
 
+    /// <summary>Rotate the read-only key for one release. The raw value is returned only once.</summary>
+    public async Task<string> RotateApiKeyAsync(long projectId, long releaseId, long managerId, CancellationToken ct = default)
+    {
+        await using var cn = await db.OpenAsync(ct);
+        await using (var exists = cn.CreateCommand())
+        {
+            exists.CommandText = "SELECT 1 FROM releases WHERE id=@release AND project_id=@project";
+            exists.Parameters.AddWithValue("@release", releaseId);
+            exists.Parameters.AddWithValue("@project", projectId);
+            if (await exists.ExecuteScalarAsync(ct) is null) throw ApiException.NotFound("Không tìm thấy bản phát hành.");
+        }
+
+        var apiKey = "tmr_read_" + Convert.ToBase64String(RandomNumberGenerator.GetBytes(32)).TrimEnd('=').Replace('+', '-').Replace('/', '_');
+        var keyHash = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(apiKey))).ToLowerInvariant();
+        var keyPrefix = apiKey[..Math.Min(apiKey.Length, 18)];
+        await using var cmd = cn.CreateCommand();
+        cmd.CommandText = @"INSERT INTO release_api_keys(release_id,key_hash,key_prefix,created_by,created_at,revoked_at)
+VALUES(@release,@hash,@prefix,@user,UTC_TIMESTAMP(),NULL)
+ON DUPLICATE KEY UPDATE key_hash=VALUES(key_hash),key_prefix=VALUES(key_prefix),created_by=VALUES(created_by),created_at=UTC_TIMESTAMP(),revoked_at=NULL";
+        cmd.Parameters.AddWithValue("@release", releaseId);
+        cmd.Parameters.AddWithValue("@hash", keyHash);
+        cmd.Parameters.AddWithValue("@prefix", keyPrefix);
+        cmd.Parameters.AddWithValue("@user", managerId);
+        await cmd.ExecuteNonQueryAsync(ct);
+        return apiKey;
+    }
+
+    /// <summary>Read a public immutable locale file after validating its release-scoped API key.</summary>
+    public async Task<(string FileName, byte[] Content, string Sha256)> PublicFileAsync(long releaseId, string locale, string? apiKey, CancellationToken ct = default)
+    {
+        if (string.IsNullOrWhiteSpace(apiKey) || apiKey.Length > 128) throw ApiException.Unauthorized("Thiếu API key hoặc key không hợp lệ.");
+        var suppliedHash = SHA256.HashData(Encoding.UTF8.GetBytes(apiKey));
+        await using var cn = await db.OpenAsync(ct);
+        await using (var keyCmd = cn.CreateCommand())
+        {
+            keyCmd.CommandText = "SELECT key_hash FROM release_api_keys WHERE release_id=@release AND revoked_at IS NULL";
+            keyCmd.Parameters.AddWithValue("@release", releaseId);
+            var storedHash = Convert.ToString(await keyCmd.ExecuteScalarAsync(ct));
+            if (storedHash is null) throw ApiException.Unauthorized("API key không hợp lệ hoặc đã bị thu hồi.");
+            byte[] storedBytes;
+            try { storedBytes = Convert.FromHexString(storedHash); }
+            catch (FormatException) { throw ApiException.Unauthorized("API key không hợp lệ hoặc đã bị thu hồi."); }
+            if (storedBytes.Length != suppliedHash.Length || !CryptographicOperations.FixedTimeEquals(storedBytes, suppliedHash))
+                throw ApiException.Unauthorized("API key không hợp lệ hoặc đã bị thu hồi.");
+        }
+
+        await using var fileCmd = cn.CreateCommand();
+        fileCmd.CommandText = "SELECT file_name,content_json,sha256 FROM release_files WHERE release_id=@release AND locale_code=@locale";
+        fileCmd.Parameters.AddWithValue("@release", releaseId);
+        fileCmd.Parameters.AddWithValue("@locale", locale);
+        await using var rd = await fileCmd.ExecuteReaderAsync(ct);
+        if (!await rd.ReadAsync(ct)) throw ApiException.NotFound("Không tìm thấy file ngôn ngữ trong bản phát hành.");
+        var bytes = Encoding.UTF8.GetBytes(rd.GetString(1));
+        var sha = rd.GetString(2);
+        EnsureIntegrity(bytes, sha, rd.GetString(0));
+        return (rd.GetString(0), bytes, sha);
+    }
+
     /// <summary>Gói toàn bộ file JSON của một release + manifest.json vào một file .zip.</summary>
     public async Task<(string FileName, byte[] Content)> ZipAsync(long projectId, long releaseId, CancellationToken ct = default)
     {
@@ -303,6 +361,142 @@ WHERE r.id=@release AND r.project_id=@project AND rf.locale_code=@locale";
 
         return ($"{slug}-{release.Version}.zip", memory.ToArray());
     }
+
+    /// <summary>Gói snapshot JSON cùng client để website khách hàng tự áp dụng data-i18n.</summary>
+    public async Task<(string FileName, byte[] Content)> IntegrationZipAsync(long projectId, long releaseId, CancellationToken ct = default)
+    {
+        var release = await GetAsync(projectId, releaseId, ct);
+        var locales = release.Files.Select(file => file.LocaleCode).Distinct(StringComparer.OrdinalIgnoreCase).Order(StringComparer.OrdinalIgnoreCase).ToArray();
+        if (locales.Length == 0) throw ApiException.NotFound("Bản phát hành không có file ngôn ngữ.");
+
+        await using var cn = await db.OpenAsync(ct);
+        string slug;
+        await using (var cmd = cn.CreateCommand())
+        {
+            cmd.CommandText = "SELECT slug FROM projects WHERE id=@project";
+            cmd.Parameters.AddWithValue("@project", projectId);
+            slug = Convert.ToString(await cmd.ExecuteScalarAsync(ct)) ?? throw ApiException.NotFound("Không tìm thấy dự án.");
+        }
+
+        using var memory = new MemoryStream();
+        using (var zip = new ZipArchive(memory, ZipArchiveMode.Create, leaveOpen: true))
+        {
+            var client = IntegrationClient(JsonSerializer.Serialize(locales));
+            await using (var entry = zip.CreateEntry("translation-manager.js", CompressionLevel.Optimal).Open())
+                await entry.WriteAsync(Encoding.UTF8.GetBytes(client), ct);
+
+            var config = $$"""
+// Nhận API key từ Manager trên trang Phát hành rồi điền vào apiKey bên dưới.
+window.TRANSLATION_MANAGER_CONFIG = {
+  apiBaseUrl: 'http://127.0.0.1:5088',
+  releaseId: {{releaseId}},
+  apiKey: 'PASTE_API_KEY_HERE',
+  selector: '[data-translation-language]',
+  defaultLocale: 'vi'
+};
+""";
+            await using (var entry = zip.CreateEntry("translation-manager.config.js", CompressionLevel.Optimal).Open())
+                await entry.WriteAsync(Encoding.UTF8.GetBytes(config), ct);
+
+            var readme = """
+Translation Manager - API tich hop website
+Du an: __PROJECT__
+Phien ban: __VERSION__
+
+1. Khi Manager phat hanh, web chinh tu tao API key rieng cho release va hien config da dien. Key chi doc cac file cua snapshot nay.
+2. Giai nen ZIP nay vao website. Mo translation-manager.config.js va thay PASTE_API_KEY_HERE bang key vua tao. Neu API da deploy, doi apiBaseUrl sang dia chi Backend.
+3. Gan data-i18n vao phan tu HTML bang key co trong JSON, vi du: <h1 data-i18n="home.title">Tieu de</h1>. Neu co bien {name}, truyen gia tri bang data-i18n-vars='{"name":"Lan"}'.
+4. Them bo chon ngon ngu: <select data-translation-language><option value="vi">Tieng Viet</option><option value="en">English</option></select>.
+5. Gan ca hai script theo thu tu: translation-manager.config.js, sau do translation-manager.js. Goi TranslationManager.init() sau khi trang da co bo chon ngon ngu.
+6. Doi gia tri select de client doc ban dich tu API va ap dung cac khoa da gan. Khoa khong co ban dich giu nguyen noi dung goc.
+
+API key chi doc JSON da phat hanh cua release nay; khong the sua ban dich, doc du an khac hoac truy cap tai khoan. Tao key moi se vo hieu hoa key cu.
+""".Replace("__PROJECT__", slug, StringComparison.Ordinal).Replace("__VERSION__", release.Version, StringComparison.Ordinal).TrimStart();
+            await using (var entry = zip.CreateEntry("README-import.txt", CompressionLevel.Optimal).Open())
+                await entry.WriteAsync(Encoding.UTF8.GetBytes(readme), ct);
+        }
+
+        return ($"{slug}-{release.Version}-api-integration.zip", memory.ToArray());
+    }
+
+    private static string IntegrationClient(string localeJson) => """
+(() => {
+  const supportedLocales = __LOCALES__;
+  const defaults = window.TRANSLATION_MANAGER_CONFIG || {};
+  let config = {};
+  let dictionary = {};
+  let sequence = 0;
+
+  function getValue(object, path) {
+    return path.split('.').reduce((value, part) => value && typeof value === 'object' ? value[part] : undefined, object);
+  }
+
+  function format(element, text) {
+    let variables = {};
+    try { variables = JSON.parse(element.dataset.i18nVars || '{}'); } catch (_) {}
+    return text.replace(/\{([A-Za-z0-9_.-]+)\}/g, (token, key) => Object.prototype.hasOwnProperty.call(variables, key) ? String(variables[key]) : token);
+  }
+
+  function apply(localeDictionary) {
+    let changed = 0;
+    document.querySelectorAll('[data-i18n]').forEach(element => {
+      const value = getValue(localeDictionary, element.dataset.i18n);
+      if (typeof value === 'string') { element.textContent = format(element, value); changed++; }
+    });
+    ['placeholder', 'title'].forEach(attribute => {
+      document.querySelectorAll(`[data-i18n-${attribute}]`).forEach(element => {
+        const value = getValue(localeDictionary, element.dataset[`i18n${attribute[0].toUpperCase()}${attribute.slice(1)}`]);
+        if (typeof value === 'string') { element.setAttribute(attribute, format(element, value)); changed++; }
+      });
+    });
+    const title = document.querySelector('[data-i18n-document-title]');
+    if (title) {
+      const value = getValue(localeDictionary, title.dataset.i18nDocumentTitle);
+      if (typeof value === 'string') { document.title = format(title, value); changed++; }
+    }
+    return changed;
+  }
+
+  async function setLanguage(locale) {
+    if (!supportedLocales.includes(locale)) throw new Error(`Ngôn ngữ không có trong gói phát hành: ${locale}`);
+    if (!config.apiBaseUrl || !config.releaseId || !config.apiKey) throw new Error('Điền apiBaseUrl, releaseId và apiKey trong translation-manager.config.js.');
+    const current = ++sequence;
+    const endpoint = `${config.apiBaseUrl.replace(/\/+$/, '')}/api/public/releases/${encodeURIComponent(config.releaseId)}/files/${encodeURIComponent(locale)}`;
+    const response = await fetch(endpoint, { headers: { 'X-API-Key': config.apiKey } });
+    if (!response.ok) throw new Error(response.status === 401 ? 'API key không hợp lệ hoặc đã bị thu hồi.' : `Không tải được bản dịch ${locale}.`);
+    const next = await response.json();
+    if (current !== sequence) return 0;
+    dictionary = next;
+    document.documentElement.lang = locale;
+    const changed = apply(dictionary);
+    document.dispatchEvent(new CustomEvent('translationmanager:language-changed', { detail: { locale, changed } }));
+    return changed;
+  }
+
+  window.TranslationManager = {
+    locales: supportedLocales.slice(),
+    setLanguage,
+    async init(options = {}) {
+      config = { ...defaults, ...options };
+      const selector = config.selector || '[data-translation-language]';
+      const select = document.querySelector(selector);
+      const initial = config.defaultLocale || select?.value || document.documentElement.lang || supportedLocales[0];
+      if (select) {
+        const existingLabels = Object.fromEntries([...select.options].map(option => [option.value, option.textContent.trim()]));
+        select.replaceChildren(...supportedLocales.map(locale => {
+          const option = document.createElement('option');
+          option.value = locale;
+          option.textContent = config.labels?.[locale] || existingLabels[locale] || locale.toUpperCase();
+          return option;
+        }));
+        select.value = supportedLocales.includes(initial) ? initial : supportedLocales[0];
+        select.addEventListener('change', () => setLanguage(select.value).catch(error => console.error('[TranslationManager]', error)));
+      }
+      return setLanguage(supportedLocales.includes(initial) ? initial : supportedLocales[0]);
+    }
+  };
+})();
+""".Replace("__LOCALES__", localeJson, StringComparison.Ordinal);
 
     // ===================== Helpers =====================
 

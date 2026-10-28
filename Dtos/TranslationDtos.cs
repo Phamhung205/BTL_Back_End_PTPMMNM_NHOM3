@@ -21,6 +21,8 @@ public sealed record BulkDeleteTranslationsRequest(string? LocaleCode, Translati
 
 public sealed record AddCommentRequest(string? Body);
 public sealed record ReviewRequest(string? Note, int ExpectedRowVersion);
+public sealed record BulkApproveItem(long TranslationId, int ExpectedRowVersion);
+public sealed record BulkApproveRequest(BulkApproveItem[]? Items);
 
 public sealed record LocaleProgress(
     string LocaleCode,

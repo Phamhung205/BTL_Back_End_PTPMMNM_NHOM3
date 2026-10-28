@@ -146,6 +146,8 @@ test('phân quyền theo vai trò', async () => {
   assert.equal((await save(ctx.rev, welcome, 'en', 'x', 'draft')).status, 403, 'reviewer không sửa bản dịch');
   assert.equal((await client(ctx.tr1).post(`${ctx.base}/translations/${welcome.translationId}/approve`, { expectedRowVersion: welcome.rowVersion })).status, 403, 'translator không duyệt');
   assert.equal((await client(ctx.tr1).put(`${ctx.base}/translations/assign`, { localeCode: 'en', stringIds: [welcome.stringId], userId: ctx.tr1.id })).status, 403, 'translator không phân công');
+  assert.equal((await client(ctx.tr1).get(`${ctx.base}/translations?locale=en&assignee=${ctx.tr2.id}`)).status, 403, 'translator không lọc theo thành viên khác');
+  assert.equal((await client(ctx.manager).get(`${ctx.base}/translations?locale=en&assignee=${ctx.tr2.id}`)).status, 200, 'manager được lọc theo thành viên trong dự án');
   assert.equal((await client(ctx.out).post(`${ctx.base}/translations/${welcome.translationId}/comments`, { body: 'hi' })).status, 403, 'người ngoài không bình luận');
 });
 

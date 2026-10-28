@@ -79,6 +79,15 @@ public sealed class TranslationsController(ProjectAccessService access, Translat
         return Ok(await translations.BulkAssignAsync(projectId,userId,request,ct));
     }
 
+    /// <summary>Duyệt theo nhóm các bản dịch đang chờ duyệt.</summary>
+    [HttpPost("approve")]
+    public async Task<IActionResult> BulkApprove(long projectId, BulkApproveRequest request, CancellationToken ct)
+    {
+        var userId = User.UserId();
+        await access.RequireAnyAsync(projectId, userId, [ProjectRole.Manager, ProjectRole.Reviewer], ct);
+        return Ok(await translations.BulkApproveAsync(projectId, userId, request, ct));
+    }
+
     [HttpGet("{translationId:long}/comments")]
     public async Task<IActionResult> Comments(long projectId,long translationId,CancellationToken ct)
     {

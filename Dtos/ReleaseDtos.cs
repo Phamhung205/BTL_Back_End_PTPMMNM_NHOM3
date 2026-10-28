@@ -29,3 +29,16 @@ public sealed record ReleaseInfo(
     long? SourceVersionId,
     string? SourceVersionName,
     ReleaseFileInfo[] Files);
+
+public sealed record PublishedReleaseInfo(
+    long Id,
+    string Version,
+    string? Note,
+    int KeyCount,
+    DateTime PublishedAt,
+    long PublishedBy,
+    string PublishedByName,
+    long? SourceVersionId,
+    string? SourceVersionName,
+    ReleaseFileInfo[] Files,
+    string ApiKey);

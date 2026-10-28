@@ -44,7 +44,10 @@ for (const [user, role] of [[translator, 'translator'], [translator2, 'translato
 expect(await m.post(`${base}/source-versions/import`, { versionName: 'source-1.0.0', data: SOURCE }), [200, 409], 'Import nguồn');
 
 // Một ít dữ liệu có sẵn để màn hình có đủ các trạng thái.
-const items = expect(await m.get(`${base}/translations?locale=en`), [200], 'Danh sách bản dịch').data;
+let items = expect(await m.get(`${base}/translations?locale=en`), [200], 'Danh sách bản dịch').data;
+const unassignedKeys = items.filter((x) => !x.assignedTo).map((x) => x.stringId);
+if (unassignedKeys.length) expect(await m.put(`${base}/translations/assign`, { localeCode: 'en', stringIds: unassignedKeys, userId: translator.id }), [200], 'Giao khóa chưa phân công cho Translator');
+items = expect(await m.get(`${base}/translations?locale=en`), [200], 'Tải lại danh sách sau phân công').data;
 const byKey = Object.fromEntries(items.map((x) => [x.key, x]));
 const save = (user, key, value, status) => client(user).post(`${base}/translations`, {
   stringId: byKey[key].stringId, localeCode: 'en', value, status, expectedRowVersion: byKey[key].rowVersion
@@ -57,7 +60,7 @@ if (byKey['app.name'].status === 'missing') {
 if (byKey['app.tagline'].status === 'missing') expect(await save(translator, 'app.tagline', 'Translate fast, release safely', 'translated'), [200], 'Dịch app.tagline');
 if (byKey['home.title'].status === 'missing') expect(await save(translator, 'home.title', 'Home', 'draft'), [200], 'Nháp home.title');
 
-const loginKeys = items.filter((x) => x.key.startsWith('login.') && !x.assignedTo).map((x) => x.stringId);
+const loginKeys = items.filter((x) => x.key.startsWith('login.')).map((x) => x.stringId);
 if (loginKeys.length) {
   expect(await m.put(`${base}/translations/assign`, { localeCode: 'en', stringIds: loginKeys, userId: translator2.id }), [200], 'Phân công login.*');
 }

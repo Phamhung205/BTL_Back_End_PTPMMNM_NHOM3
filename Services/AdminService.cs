@@ -6,9 +6,9 @@ using TranslationManager.Api.Support;
 
 namespace TranslationManager.Api.Services;
 
-public sealed class AdminService(Db db, PasswordHasher hasher)
+public sealed partial class AdminService(Db db, PasswordHasher hasher)
 {
-    public async Task BootstrapAsync(IConfiguration configuration, CancellationToken ct = default)
+    public async Task BootstrapAsync(IConfiguration configuration, CancellationToken ct = default, bool allowAdditional = false)
     {
         var email = (configuration["BootstrapAdmin:Email"] ?? "").Trim().ToLowerInvariant();
         var name = (configuration["BootstrapAdmin:DisplayName"] ?? "System Admin").Trim();
@@ -19,7 +19,7 @@ public sealed class AdminService(Db db, PasswordHasher hasher)
         await using var tx = await cn.BeginTransactionAsync(ct);
         await SystemAdminGuard.LockAsync(cn, tx, ct);
         await using var count = new MySqlCommand("SELECT COUNT(*) FROM users WHERE system_role='admin'", cn, tx);
-        if (Convert.ToInt32(await count.ExecuteScalarAsync(ct)) > 0) { await tx.CommitAsync(ct); return; }
+        if (Convert.ToInt32(await count.ExecuteScalarAsync(ct)) > 0 && !allowAdditional) { await tx.CommitAsync(ct); return; }
         long id;
         await using (var existing = new MySqlCommand("SELECT id,password_hash,password_salt FROM users WHERE email=@email FOR UPDATE", cn, tx))
         {

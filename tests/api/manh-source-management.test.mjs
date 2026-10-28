@@ -75,7 +75,7 @@ test('ngôn ngữ: tên riêng từng dự án, validation và gỡ an toàn', a
 });
 
 test('JSON không hợp lệ không tạo phiên bản hoặc ghi một phần dữ liệu', async () => {
-  for (const data of [null, [], {}, { a: [] }, { a: 1 }, { a: false }, { a: {} }, { 'a.b': 'x' }, { 'x ': 'x' }, { ['x'.repeat(501)]: 'x' }, { a: 'x'.repeat(10001) }]) {
+  for (const data of [null, [], {}, { a: [] }, { a: 1 }, { a: false }, { a: {} }, { 'a.b': 'x', a: { b: 'y' } }, { 'x ': 'x' }, { ['x'.repeat(501)]: 'x' }, { a: 'x'.repeat(10001) }]) {
     expect(await importSource('invalid', data), 400);
   }
   expect(await importSource('x'.repeat(121)), 400);
