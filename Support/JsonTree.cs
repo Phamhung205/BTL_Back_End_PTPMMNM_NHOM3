@@ -8,7 +8,7 @@ namespace TranslationManager.Api.Support;
 public static class JsonTree
 {
     // Chuyển JSON thành danh sách Translation Keys.
-    public static Dictionary<string, string> Flatten(JsonElement root)
+    public static Dictionary<string, string> Flatten(JsonElement root, int maxValueLength = 10000)
     {
         if (root.ValueKind != JsonValueKind.Object)
         {
@@ -21,7 +21,7 @@ public static class JsonTree
             StringComparer.Ordinal
         );
 
-        Walk(root, "", output, 1);
+        Walk(root, "", output, 1, maxValueLength);
 
         // Kiểm tra xung đột khóa cha và khóa con.
         foreach (var path in output.Keys)
@@ -51,7 +51,8 @@ public static class JsonTree
         JsonElement node,
         string path,
         Dictionary<string, string> output,
-        int depth
+        int depth,
+        int maxValueLength
     )
     {
         if (depth > 64)
@@ -119,7 +120,7 @@ public static class JsonTree
                     );
                 }
 
-                Walk(property.Value, next, output, depth + 1);
+                Walk(property.Value, next, output, depth + 1, maxValueLength);
             }
 
             return;
@@ -143,10 +144,10 @@ public static class JsonTree
 
         string value = node.GetString() ?? "";
 
-        if (value.Length > 10000)
+        if (value.Length > maxValueLength)
         {
             throw ApiException.BadRequest(
-                $"Giá trị tại '{path}' tối đa 10000 ký tự."
+                $"Giá trị tại '{path}' tối đa {maxValueLength} ký tự."
             );
         }
 

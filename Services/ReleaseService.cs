@@ -132,7 +132,7 @@ WHERE pl.project_id=@project AND pl.is_source=1 AND pl.locale_code=p.source_loca
                 cmd.Transaction = tx;
                 cmd.CommandText = "SELECT slug FROM projects WHERE id=@project";
                 cmd.Parameters.AddWithValue("@project", projectId);
-                slug = Convert.ToString(await cmd.ExecuteScalarAsync(ct)) ?? throw ApiException.NotFound("Không tìm thấy dự án.");
+                slug = await cmd.ExecuteScalarAsync(ct) as string ?? throw ApiException.NotFound("Không tìm thấy dự án.");
             }
 
             await using (var cmd = cn.CreateCommand())
@@ -326,7 +326,7 @@ ON DUPLICATE KEY UPDATE key_hash=VALUES(key_hash),key_prefix=VALUES(key_prefix),
         {
             cmd.CommandText = "SELECT slug FROM projects WHERE id=@project";
             cmd.Parameters.AddWithValue("@project", projectId);
-            slug = Convert.ToString(await cmd.ExecuteScalarAsync(ct)) ?? throw ApiException.NotFound("Không tìm thấy dự án.");
+            slug = await cmd.ExecuteScalarAsync(ct) as string ?? throw ApiException.NotFound("Không tìm thấy dự án.");
         }
 
         using var memory = new MemoryStream();
@@ -375,7 +375,7 @@ ON DUPLICATE KEY UPDATE key_hash=VALUES(key_hash),key_prefix=VALUES(key_prefix),
         {
             cmd.CommandText = "SELECT slug FROM projects WHERE id=@project";
             cmd.Parameters.AddWithValue("@project", projectId);
-            slug = Convert.ToString(await cmd.ExecuteScalarAsync(ct)) ?? throw ApiException.NotFound("Không tìm thấy dự án.");
+            slug = await cmd.ExecuteScalarAsync(ct) as string ?? throw ApiException.NotFound("Không tìm thấy dự án.");
         }
 
         using var memory = new MemoryStream();

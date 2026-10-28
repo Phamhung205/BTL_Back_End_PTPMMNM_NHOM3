@@ -172,7 +172,7 @@ ORDER BY pl.locale_code";
                 cmd.CommandText = "SELECT source_text FROM source_strings WHERE id=@id AND project_id=@project AND status='active' FOR UPDATE";
                 cmd.Parameters.AddWithValue("@id", request.StringId);
                 cmd.Parameters.AddWithValue("@project", projectId);
-                source = Convert.ToString(await cmd.ExecuteScalarAsync(ct)) ?? throw ApiException.NotFound("Không tìm thấy khóa nguồn đang hoạt động.");
+                source = await cmd.ExecuteScalarAsync(ct) as string ?? throw ApiException.NotFound("Không tìm thấy khóa nguồn đang hoạt động trong dự án này.");
             }
 
             // Nháp được phép thiếu biến; gửi review thì bắt buộc khớp.
@@ -370,6 +370,135 @@ SELECT id,@manager,NULL,NULL,'created' FROM translations WHERE locale_code=@loca
         }
         await tx.CommitAsync(ct);
         return new { localeCode = locale, created = missing.Count, existing = total - missing.Count };
+    }
+
+    // ===================== Nhập bản dịch có sẵn từ JSON =====================
+
+    private const int MaxImportReportItems = 100;
+
+    /// <summary>
+    /// Nhập bản dịch có sẵn (ví dụ en.json của website) cho một ngôn ngữ đích. Khóa đối chiếu với chuỗi nguồn đang dùng.
+    /// Không bao giờ tự duyệt: bản khớp biến lưu theo trạng thái yêu cầu (chờ duyệt/nháp); bản thiếu/thừa biến luôn lưu nháp.
+    /// Nhập lại cùng tệp không tạo bản ghi trùng; bản đang có nội dung khác chỉ bị thay khi Overwrite = true.
+    /// </summary>
+    public async Task<object> ImportAsync(long projectId, long managerId, ImportTranslationsRequest request, CancellationToken ct = default)
+    {
+        var requestedStatus = (request.Status ?? TranslationStatus.Translated).Trim().ToLowerInvariant();
+        if (requestedStatus is not (TranslationStatus.Draft or TranslationStatus.Translated))
+            throw ApiException.BadRequest("Bản dịch nhập vào chỉ được lưu nháp (draft) hoặc gửi duyệt (translated); không tự duyệt.");
+        // Report overlong translations per key; retain the shared 2 MB document limit.
+        // Source imports still reject strings longer than 10,000 characters.
+        var entries = SourceDocument.Parse(request.RawJson, "JSON bản dịch", int.MaxValue);
+        if (entries.Count == 0) throw ApiException.BadRequest("Tệp bản dịch không có khóa nào.");
+
+        try
+        {
+            await using var cn = await db.OpenAsync(ct);
+            await using var tx = await cn.BeginTransactionAsync(ct);
+            await LockManagerMutationAsync(cn, tx, projectId, managerId, ct);
+            var locale = await RequireTargetLocaleAsync(cn, tx, projectId, request.LocaleCode, ct);
+
+            var sources = new Dictionary<string, (long Id, string Text)>(StringComparer.Ordinal);
+            await using (var cmd = cn.CreateCommand())
+            {
+                cmd.Transaction = tx;
+                cmd.CommandText = "SELECT id,key_path,source_text FROM source_strings WHERE project_id=@project AND status='active' FOR UPDATE";
+                cmd.Parameters.AddWithValue("@project", projectId);
+                await using var rd = await cmd.ExecuteReaderAsync(ct);
+                while (await rd.ReadAsync(ct)) sources[rd.GetString(1)] = (rd.GetInt64(0), rd.GetString(2));
+            }
+
+            var existing = new Dictionary<long, (long Id, string? Value, int RowVersion)>();
+            await using (var cmd = cn.CreateCommand())
+            {
+                cmd.Transaction = tx;
+                cmd.CommandText = @"SELECT t.id,t.string_id,t.value,t.row_version FROM translations t JOIN source_strings ss ON ss.id=t.string_id
+WHERE ss.project_id=@project AND ss.status='active' AND t.locale_code=@locale FOR UPDATE";
+                cmd.Parameters.AddWithValue("@project", projectId);
+                cmd.Parameters.AddWithValue("@locale", locale);
+                await using var rd = await cmd.ExecuteReaderAsync(ct);
+                while (await rd.ReadAsync(ct)) existing[rd.GetInt64(1)] = (rd.GetInt64(0), rd.IsDBNull(2) ? null : rd.GetString(2), rd.GetInt32(3));
+            }
+
+            int created = 0, updated = 0, unchanged = 0, placeholderMismatch = 0, savedDraft = 0;
+            List<string> kept = [], notInSource = [], empty = [], tooLong = [];
+            var placeholderIssues = new List<object>();
+            var touched = new List<long>();
+            foreach (var (key, value) in entries.OrderBy(entry => entry.Key, StringComparer.Ordinal))
+            {
+                if (!sources.TryGetValue(key, out var source)) { notInSource.Add(key); continue; }
+                if (string.IsNullOrWhiteSpace(value)) { empty.Add(key); continue; }
+                if (value.Length > MaxValueLength) { tooLong.Add(key); continue; }
+
+                var check = PlaceholderValidator.Check(source.Text, value);
+                var status = check.Ok ? requestedStatus : TranslationStatus.Draft;
+                if (!check.Ok && ++placeholderMismatch <= MaxImportReportItems)
+                    placeholderIssues.Add(new { key, missing = check.Missing, extra = check.Extra });
+
+                long translationId;
+                string? oldValue = null;
+                if (!existing.TryGetValue(source.Id, out var row))
+                {
+                    await using var insert = cn.CreateCommand();
+                    insert.Transaction = tx;
+                    insert.CommandText = @"INSERT INTO translations(string_id,locale_code,value,status,assigned_to,row_version,updated_by)
+VALUES(@string,@locale,@value,@status,NULL,1,@user); SELECT LAST_INSERT_ID();";
+                    insert.Parameters.AddWithValue("@string", source.Id);
+                    insert.Parameters.AddWithValue("@locale", locale);
+                    insert.Parameters.AddWithValue("@value", value);
+                    insert.Parameters.AddWithValue("@status", status);
+                    insert.Parameters.AddWithValue("@user", managerId);
+                    translationId = Convert.ToInt64(await insert.ExecuteScalarAsync(ct));
+                    created++;
+                }
+                else if (row.Value is not null && string.Equals(row.Value, value, StringComparison.Ordinal))
+                {
+                    // Giữ nguyên trạng thái (đã duyệt, cần kiểm tra lại...) để nhập lại cùng tệp không thay đổi gì.
+                    unchanged++;
+                    continue;
+                }
+                else if (row.Value is not null && !request.Overwrite)
+                {
+                    kept.Add(key);
+                    continue;
+                }
+                else
+                {
+                    await using var update = cn.CreateCommand();
+                    update.Transaction = tx;
+                    update.CommandText = @"UPDATE translations SET value=@value,status=@status,row_version=row_version+1,updated_by=@user,updated_at=NOW()
+WHERE id=@id AND row_version=@expected";
+                    update.Parameters.AddWithValue("@value", value);
+                    update.Parameters.AddWithValue("@status", status);
+                    update.Parameters.AddWithValue("@user", managerId);
+                    update.Parameters.AddWithValue("@id", row.Id);
+                    update.Parameters.AddWithValue("@expected", row.RowVersion);
+                    if (await update.ExecuteNonQueryAsync(ct) == 0)
+                        throw ApiException.Conflict("Có bản dịch vừa được người khác cập nhật. Chưa nhập bản dịch nào; hãy thử lại.");
+                    translationId = row.Id;
+                    oldValue = row.Value;
+                    updated++;
+                }
+                if (!check.Ok) savedDraft++;
+                await AddHistoryAsync(cn, tx, translationId, managerId, "imported", oldValue, value, ct);
+                touched.Add(source.Id);
+            }
+
+            foreach (var stringId in touched) await TranslationMemoryService.CaptureForStringAsync(cn, tx, stringId, ct);
+            await tx.CommitAsync(ct);
+            return new
+            {
+                localeCode = locale, status = requestedStatus, overwrite = request.Overwrite, total = entries.Count,
+                created, updated, unchanged, keptExisting = kept.Count, notInSource = notInSource.Count,
+                empty = empty.Count, tooLong = tooLong.Count, placeholderMismatch, savedDraft,
+                keptExistingKeys = kept.Take(MaxImportReportItems), notInSourceKeys = notInSource.Take(MaxImportReportItems),
+                emptyKeys = empty.Take(MaxImportReportItems), tooLongKeys = tooLong.Take(MaxImportReportItems), placeholderIssues
+            };
+        }
+        catch (MySqlException ex) when (IsConcurrencyError(ex))
+        {
+            throw ApiException.Conflict("Có người khác vừa lưu bản dịch cùng lúc. Chưa nhập bản dịch nào; hãy thử lại.");
+        }
     }
 
     public async Task<object> DeleteAsync(long projectId, long managerId, long translationId, int expectedRowVersion, CancellationToken ct = default)

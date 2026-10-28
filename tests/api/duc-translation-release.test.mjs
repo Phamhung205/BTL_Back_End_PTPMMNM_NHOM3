@@ -78,13 +78,22 @@ test(`chuẩn bị dữ liệu (backend: ${BASE})`, async () => {
   r = await m.post(`${ctx.base}/source-versions/import`, { versionName: 'source-1.0.0', data: SOURCE_V1 });
   assert.equal(r.status, 200, show(r));
   assert.equal(r.data.added, 4);
+
+  // Translator chỉ thấy và dịch khóa được Manager giao: giao toàn bộ en + zh cho Người dịch A.
+  for (const locale of ['en', 'zh']) {
+    const keys = (await m.get(`${ctx.base}/translations?locale=${locale}`)).data.map((row) => row.stringId);
+    r = await m.put(`${ctx.base}/translations/assign`, { localeCode: locale, stringIds: keys, userId: ctx.tr1.id });
+    assert.equal(r.status, 200, show(r));
+    assert.equal(r.data.assigned, 4);
+  }
 });
 
 test('danh sách bản dịch: dữ liệu, quyền và tham số', async () => {
   const items = await list(ctx.tr1, 'en');
   assert.equal(items.length, 4);
-  assert.ok(items.every((x) => x.status === 'missing' && x.translationId === null));
+  assert.ok(items.every((x) => x.status === 'missing' && x.assignedTo === ctx.tr1.id));
   assert.deepEqual(items.find((x) => x.key === 'welcome').placeholders, ['{count}', '{name}']);
+  assert.equal((await list(ctx.tr2, 'en')).length, 0, 'translator chưa được giao không thấy khóa nào');
 
   assert.equal((await client(ctx.out).get(`${ctx.base}/translations?locale=en`)).status, 403, 'người ngoài dự án');
   assert.equal((await client().get(`${ctx.base}/translations?locale=en`)).status, 401, 'không có token');
@@ -115,35 +124,37 @@ test('placeholder: gửi review thiếu/thừa biến bị chặn, lưu nháp đ
   r = await save(ctx.tr1, welcome, 'en', 'Hello {name}', 'draft');
   assert.equal(r.status, 200, show(r));
   assert.equal(r.data.status, 'draft');
-  assert.equal(r.data.rowVersion, 1);
+  assert.equal(r.data.rowVersion, welcome.rowVersion + 1);
   assert.equal(r.data.placeholderCheck.ok, false);
 });
 
 test('conflict: hai người cùng sửa một bản dịch → 409, không ghi đè âm thầm', async () => {
+  // Người dịch A (được giao) và Manager cùng mở bản dịch từ một phiên bản nền.
   const seenByA = await item(ctx.tr1, 'en', 'welcome');
-  const seenByB = await item(ctx.tr2, 'en', 'welcome');
-  assert.equal(seenByA.rowVersion, seenByB.rowVersion);
+  const seenByManager = await item(ctx.manager, 'en', 'welcome');
+  assert.equal(seenByA.rowVersion, seenByManager.rowVersion);
 
   let r = await save(ctx.tr1, seenByA, 'en', TARGET.en.welcome, 'translated');
   assert.equal(r.status, 200, show(r));
   assert.equal(r.data.rowVersion, seenByA.rowVersion + 1);
 
-  r = await save(ctx.tr2, seenByB, 'en', 'Hi {name} ({count})', 'translated');
+  r = await save(ctx.manager, seenByManager, 'en', 'Hi {name} ({count})', 'translated');
   assert.equal(r.status, 409, show(r));
   assert.equal(r.data.details.currentRowVersion, seenByA.rowVersion + 1);
   assert.equal(r.data.details.currentValue, TARGET.en.welcome);
   assert.equal(r.data.details.updatedBy, 'Người dịch A');
   assert.equal((await item(ctx.tr1, 'en', 'welcome')).value, TARGET.en.welcome, 'giá trị của A không bị ghi đè');
 
-  // Cùng tạo mới một bản dịch chưa tồn tại.
+  // Cùng lưu nội dung đầu tiên cho một khóa chưa dịch.
   const title = await item(ctx.tr1, 'en', 'home.title');
-  assert.equal((await save(ctx.tr1, title, 'en', 'Home', 'draft', 0)).status, 200);
-  assert.equal((await save(ctx.tr2, title, 'en', 'Homepage', 'draft', 0)).status, 409);
+  assert.equal((await save(ctx.tr1, title, 'en', 'Home', 'draft')).status, 200);
+  assert.equal((await save(ctx.manager, title, 'en', 'Homepage', 'draft')).status, 409);
 });
 
 test('phân quyền theo vai trò', async () => {
   const welcome = await item(ctx.rev, 'en', 'welcome');
   assert.equal((await save(ctx.rev, welcome, 'en', 'x', 'draft')).status, 403, 'reviewer không sửa bản dịch');
+  assert.equal((await save(ctx.tr2, welcome, 'en', 'x', 'draft')).status, 403, 'translator không sửa khóa chưa được giao cho mình');
   assert.equal((await client(ctx.tr1).post(`${ctx.base}/translations/${welcome.translationId}/approve`, { expectedRowVersion: welcome.rowVersion })).status, 403, 'translator không duyệt');
   assert.equal((await client(ctx.tr1).put(`${ctx.base}/translations/assign`, { localeCode: 'en', stringIds: [welcome.stringId], userId: ctx.tr1.id })).status, 403, 'translator không phân công');
   assert.equal((await client(ctx.tr1).get(`${ctx.base}/translations?locale=en&assignee=${ctx.tr2.id}`)).status, 403, 'translator không lọc theo thành viên khác');
@@ -165,7 +176,8 @@ test('phân công: hàng loạt cho khóa chưa dịch, chặn người không �
   assert.ok(mine.every((x) => x.status === 'missing' && x.translationId !== null && x.assignedToName === 'Người dịch B'));
   assert.ok(!(await list(ctx.manager, 'en', '&assignee=none')).some((x) => x.key === 'login.button'));
 
-  const assigned = await item(ctx.tr1, 'en', 'login.button');
+  assert.ok(!(await list(ctx.tr1, 'en')).some((x) => x.key === 'login.button'), 'A không còn thấy khóa đã giao cho B');
+  const assigned = await item(ctx.manager, 'en', 'login.button');
   r = await save(ctx.tr1, assigned, 'en', 'Sign in', 'translated');
   assert.equal(r.status, 403, 'A không sửa khóa đã giao cho B: ' + show(r));
   r = await save(ctx.tr2, assigned, 'en', 'Sign in', 'translated');
@@ -237,7 +249,7 @@ test('review: approve/reject, trạng thái và conflict khi duyệt', async () 
 
   r = await client(ctx.tr1).get(`${ctx.base}/translations/${welcome.translationId}/history`);
   assert.equal(r.status, 200);
-  assert.deepEqual(r.data.map((h) => h.action), ['approved', 'submitted', 'rejected', 'submitted', 'saved_draft']);
+  assert.deepEqual(r.data.map((h) => h.action), ['approved', 'submitted', 'rejected', 'submitted', 'saved_draft', 'assigned']);
 });
 
 test('kiểm tra phát hành khi còn thiếu bản dịch', async () => {

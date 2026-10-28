@@ -15,6 +15,11 @@ public sealed record AssignTranslationRequest(long? UserId, int ExpectedRowVersi
 public sealed record BulkAssignRequest(string? LocaleCode, long[]? StringIds, long? UserId);
 
 public sealed record CreateMissingTranslationsRequest(string? LocaleCode);
+
+/// <summary>Nhập bản dịch có sẵn của website (JSON lồng nhau hoặc khóa có dấu chấm) cho một ngôn ngữ đích.</summary>
+/// <param name="Status">"translated" = gửi duyệt (mặc định), "draft" = lưu nháp. Không bao giờ tự duyệt.</param>
+/// <param name="Overwrite">true = thay bản dịch đang có nội dung khác; false = giữ bản đang có.</param>
+public sealed record ImportTranslationsRequest(string? LocaleCode, string? RawJson, string? Status, bool Overwrite);
 public sealed record DeleteTranslationRequest(int ExpectedRowVersion);
 public sealed record TranslationDeleteItem(long TranslationId, int ExpectedRowVersion);
 public sealed record BulkDeleteTranslationsRequest(string? LocaleCode, TranslationDeleteItem[]? Items);

@@ -54,6 +54,15 @@ public sealed class TranslationsController(ProjectAccessService access, Translat
         return Ok(await translations.CreateMissingAsync(projectId, userId, request.LocaleCode, ct));
     }
 
+    /// <summary>Nhập bản dịch có sẵn từ JSON (Manager). Bản dịch nhập vào vẫn phải qua duyệt.</summary>
+    [HttpPost("import")]
+    public async Task<IActionResult> Import(long projectId, ImportTranslationsRequest request, CancellationToken ct)
+    {
+        var userId = User.UserId();
+        await access.RequireManagerAsync(projectId, userId, ct);
+        return Ok(await translations.ImportAsync(projectId, userId, request, ct));
+    }
+
     [HttpDelete("{translationId:long}")]
     public async Task<IActionResult> Delete(long projectId, long translationId, DeleteTranslationRequest request, CancellationToken ct)
     {

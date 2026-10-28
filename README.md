@@ -95,6 +95,7 @@ GET  /api/projects/{projectId}/source-versions/{versionId}/changes
 GET  /api/projects/{projectId}/translations?locale=en&q=&status=&assignee=
 GET  /api/projects/{projectId}/translations/stats
 POST /api/projects/{projectId}/translations
+POST /api/projects/{projectId}/translations/import
 PUT  /api/projects/{projectId}/translations/assign
 PUT  /api/projects/{projectId}/translations/{translationId}/assign
 GET  /api/projects/{projectId}/translations/{translationId}/comments
@@ -156,6 +157,7 @@ Backend và MariaDB phải đang chạy; dùng một CSDL kiểm thử. Test t�
 ```powershell
 node tests/api/manh-source-management.test.mjs http://localhost:5088
 node tests/api/duc-translation-release.test.mjs http://localhost:5088
+node tests/api/duc-import-security.test.mjs http://localhost:5088
 ```
 
 Bộ Mạnh gồm 10 nhóm: quyền, locale độc lập giữa dự án, JSON sai/giới hạn tệp, hơn 100 khóa, Unicode/hoa-thường, import lại/trùng phiên bản, draft conflict khi nguồn đổi, xóa/khôi phục, diff hai snapshot, import đồng thời và release cũ giữ nguyên.
@@ -174,7 +176,17 @@ missing ──lưu nháp──> draft ──gửi review──> translated ─�
 
 - `missing` là trạng thái suy ra (chưa có bản dịch, hoặc mới được phân công — `value` NULL).
 - Lưu nháp được phép thiếu biến; **gửi review / duyệt** bắt buộc biến `{name}`, `{count}`... khớp chuỗi nguồn, sai trả 400 kèm `details.missing` / `details.extra`.
-- Quyền: manager + translator sửa bản dịch (translator không sửa được khóa đã giao cho người khác); manager phân công; manager + reviewer duyệt/từ chối; mọi thành viên bình luận; chỉ manager phát hành.
+- Quyền: manager sửa mọi bản dịch; translator chỉ thấy và sửa khóa Manager đã giao cho mình; manager phân công và nhập bản dịch từ tệp; manager + reviewer duyệt/từ chối; mọi thành viên bình luận; chỉ manager phát hành.
+- Lưu bản dịch chỉ nhận `stringId` của khóa nguồn **đang dùng trong đúng dự án** ở URL; khóa của dự án khác, khóa đã xóa hoặc không tồn tại trả 404 và không ghi dữ liệu.
+
+### Nhập bản dịch có sẵn
+
+`POST /api/projects/{projectId}/translations/import` (Manager), body `{ localeCode, rawJson, status, overwrite }` với `rawJson` là JSON lồng nhau hoặc khóa có dấu chấm (cùng quy ước với nhập nguồn, tối đa 2 MB). Trong một giao dịch:
+
+- Khóa đối chiếu với chuỗi nguồn đang dùng; khóa không có trong nguồn, nội dung rỗng hoặc quá 10.000 ký tự bị bỏ qua và liệt kê trong báo cáo.
+- `status`: `translated` (mặc định, chờ duyệt) hoặc `draft`; **không tự duyệt**. Bản thiếu/thừa biến luôn lưu nháp và được liệt kê trong `placeholderIssues`.
+- Nhập lại cùng nội dung → `unchanged`, giữ nguyên trạng thái (kể cả đã duyệt / cần kiểm tra lại). Bản đang có nội dung khác chỉ bị thay khi `overwrite: true`; khi đó `row_version` tăng nên người đang sửa từ bản cũ nhận 409.
+- Kết quả: `created`, `updated`, `unchanged`, `keptExisting`, `notInSource`, `empty`, `tooLong`, `placeholderMismatch` và danh sách khóa (tối đa 100 mỗi loại). Lịch sử ghi thao tác `imported`.
 
 ### Phát hiện xung đột (HTTP 409)
 
@@ -199,6 +211,10 @@ node tests/api/duc-translation-release.test.mjs http://localhost:5088
 ```
 
 13 nhóm test: danh sách/lọc/quyền, placeholder, **conflict khi hai người cùng sửa**, phân quyền, phân công, bình luận, approve/reject, điều kiện phát hành, phát hành JSON lồng nhau + Unicode + SHA-256, **release cũ không đổi** khi sửa bản dịch / import nguồn mới, tải .zip, thống kê. Mỗi lần chạy tạo user/dự án mới nên chạy lại được.
+
+`node tests/api/duc-import-security.test.mjs http://localhost:5088`: 5 nhóm — hồi quy không ghi bản dịch sang khóa của dự án khác/đã xóa/không tồn tại; nhập bản dịch (báo cáo, không tự duyệt, sai biến lưu nháp); nhập lại không trùng, giữ/ghi đè bản đang có và 409 cho người sửa từ bản cũ; quyền và JSON không hợp lệ.
+
+Bộ 5 phép thử bắt buộc + 2 tình huống của đề tài chạy trên dữ liệu 3 website mẫu nằm ở Frontend: `tests/required-tests.mjs` (xem `docs/PHEP_THU_BAT_BUOC.md`).
 
 ### Dữ liệu demo cho giao diện
 
@@ -260,7 +276,7 @@ API bổ sung trong WorkspaceController:
 
 Nếu CSDL MariaDB đã có đủ bảng nhưng dùng schema cũ, cần migration 002 rồi 003. Controller mới không thêm bảng. Lượt này migration chỉ được chạy trên database kiểm thử riêng ở cổng 3307, không sửa database XAMPP cổng 3306.
 
-Hai Backend build thành công. Bộ Translation/Release đạt 13/13 nhóm, Source/Locale đạt 10/10 nhóm; luồng đầy đủ qua gateway đạt 53/53 kiểm tra trên MariaDB kiểm thử. Chi tiết sử dụng ở WORKFLOW_FEATURES.md trong Frontend.
+Hai Backend build thành công. Bộ Translation/Release đạt 13/13 nhóm, Source/Locale đạt 10/10 nhóm; luồng đầy đủ qua gateway đạt 53/53 kiểm tra trên MariaDB kiểm thử. Chi tiết sử dụng ở docs/FEATURES.md trong Frontend.
 
 ## Admin hệ thống và demo
 
@@ -270,7 +286,7 @@ Admin quản lý tài khoản, khóa/mở, vai trò hệ thống, toàn bộ d�
 
 Admin đầu tiên được tạo bằng CLI --bootstrap-admin với BootstrapAdmin__Email, BootstrapAdmin__DisplayName, BootstrapAdmin__Password (12+ ký tự), connection string và JWT phù hợp. Lệnh không cấp thêm Admin nếu đã có Admin, không có bootstrap API công khai.
 
-Frontend có prepare-demo.ps1 và test-all.ps1. Bộ demo dùng translation_manager_demo ở MariaDB riêng cổng 3307. Hướng dẫn và tài khoản demo: DEMO_GUIDE.md trong Frontend. Không áp dụng mật khẩu demo vào hệ thống thật.
+Frontend có prepare-demo.ps1 và test-all.ps1. Bộ demo dùng translation_manager_demo ở MariaDB riêng cổng 3307. Hướng dẫn và tài khoản demo: docs/SETUP.md trong Frontend. Không áp dụng mật khẩu demo vào hệ thống thật.
 
 
 ## Bổ sung ngày 28/10/2026
@@ -278,3 +294,11 @@ Frontend có prepare-demo.ps1 và test-all.ps1. Bộ demo dùng translation_mana
 POST /api/projects nhận thêm targetLocaleCodes và members (email hoặc userId, role); tạo dự án, ngôn ngữ và thành viên trong cùng transaction. Payload cũ vẫn hoạt động. GET /api/projects/{id}/releases/report trả báo cáo điều kiện hiện tại và lịch sử phát hành. --create-local-admin chỉ tạo Admin bằng CLI với CSDL localhost; thông tin lấy từ biến BootstrapAdmin, không có endpoint công khai cấp Admin.
 
 Frontend có hướng dẫn và ví dụ tại docs/HUONG_DAN_NHOM.md, tests/project-onboarding.mjs và examples/website. Bản dịch mẫu có hai dự án 1.010 / 170 khóa, en/vi/zh, hai source version và hai release phục vụ tình huống 2.
+
+## Import bản dịch JSON — cập nhật 29/10/2026
+
+Manager gọi POST /api/projects/{projectId}/translations/import với localeCode, rawJson, status (draft/translated) và overwrite. Bản nhập không tự duyệt. Báo cáo trả created/updated/unchanged/keptExisting, empty/notInSource/tooLong, placeholderMismatch (sai biến trong tệp), savedDraft (số bản sai biến thực sự được ghi và lưu nháp), kèm danh sách khóa.
+
+Khóa sai dự án/đã xóa/không tồn tại không được ghi. Cùng nội dung giữ nguyên trạng thái; đổi nội dung khi overwrite=true thì cần duyệt lại. Giá trị trên 10.000 ký tự bị bỏ qua theo khóa trong import bản dịch; import nguồn vẫn từ chối toàn bộ tài liệu nếu có giá trị quá dài. Giới hạn tài liệu JSON vẫn là 2 MB.
+
+Kiểm thử hồi quy: tests/api/duc-import-security.test.mjs (6 nhóm). Hướng dẫn chạy, dữ liệu đủ 2 dự án/3 ngôn ngữ/ít nhất 100 khóa và hai tình huống nằm trong docs/DEMO_NHOM3.md của repo frontend.
