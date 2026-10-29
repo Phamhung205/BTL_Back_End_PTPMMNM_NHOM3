@@ -302,3 +302,9 @@ Manager gọi POST /api/projects/{projectId}/translations/import với localeCod
 Khóa sai dự án/đã xóa/không tồn tại không được ghi. Cùng nội dung giữ nguyên trạng thái; đổi nội dung khi overwrite=true thì cần duyệt lại. Giá trị trên 10.000 ký tự bị bỏ qua theo khóa trong import bản dịch; import nguồn vẫn từ chối toàn bộ tài liệu nếu có giá trị quá dài. Giới hạn tài liệu JSON vẫn là 2 MB.
 
 Kiểm thử hồi quy: tests/api/duc-import-security.test.mjs (6 nhóm). Hướng dẫn chạy, dữ liệu đủ 2 dự án/3 ngôn ngữ/ít nhất 100 khóa và hai tình huống nằm trong docs/DEMO_NHOM3.md của repo frontend.
+
+### Dịch chữ động trên website mẫu
+
+Client trong gói tích hợp có `TranslationManager.t(key, variables)` để lấy chuỗi theo ngôn ngữ đang dùng, và `TranslationManager.apply()` để áp dụng lại bản dịch sau khi tạo phần tử động. Các thuộc tính hỗ trợ: `data-i18n`, `data-i18n-placeholder`, `data-i18n-title`, `data-i18n-document-title`, `data-i18n-alt`, `data-i18n-aria-label`; biến truyền qua `data-i18n-vars`.
+
+Dùng `textContent` cho chuỗi trả về, tránh ghép nội dung vào HTML. Sự kiện `translationmanager:language-changed` cho phép cập nhật biến đã dịch (tên sản phẩm, độ mạnh mật khẩu). Danh sách ngôn ngữ lấy từ các file thật trong release. Cần tải lại client khi nâng cấp website mẫu cũ.
