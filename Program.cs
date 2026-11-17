@@ -71,7 +71,7 @@ builder.Services
                 await using var cmd = cn.CreateCommand();
 
                 // ĐÃ SỬA: Thay system_role thành role cho khớp với bảng users trong DB
-                cmd.CommandText = "SELECT role FROM users WHERE id=@id AND is_active=1";
+                cmd.CommandText = "SELECT system_role FROM users WHERE id=@id AND is_active=1";
                 cmd.Parameters.AddWithValue("@id", userId);
 
                 var role = await cmd.ExecuteScalarAsync(context.HttpContext.RequestAborted);
