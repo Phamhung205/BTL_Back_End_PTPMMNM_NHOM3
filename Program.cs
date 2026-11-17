@@ -69,8 +69,11 @@ builder.Services
                 var db = context.HttpContext.RequestServices.GetRequiredService<Db>();
                 await using var cn = await db.OpenAsync(context.HttpContext.RequestAborted);
                 await using var cmd = cn.CreateCommand();
-                cmd.CommandText = "SELECT system_role FROM users WHERE id=@id AND is_active=1";
+
+                // ĐÃ SỬA: Thay system_role thành role cho khớp với bảng users trong DB
+                cmd.CommandText = "SELECT role FROM users WHERE id=@id AND is_active=1";
                 cmd.Parameters.AddWithValue("@id", userId);
+
                 var role = await cmd.ExecuteScalarAsync(context.HttpContext.RequestAborted);
                 if (role is null) { context.Fail("Account unavailable."); return; }
                 var identity = (ClaimsIdentity)principal.Identity!;
