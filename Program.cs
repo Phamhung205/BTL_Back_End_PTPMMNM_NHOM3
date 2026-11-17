@@ -162,3 +162,4 @@ using (var scope = app.Services.CreateScope())
 
 app.MapControllers();
 app.Run();
+// bản này add lại để chạy 
