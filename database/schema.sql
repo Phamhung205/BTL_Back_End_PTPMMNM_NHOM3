@@ -147,7 +147,9 @@ CREATE TABLE IF NOT EXISTS translation_history (
   old_value TEXT NULL,
   new_value TEXT NULL,
   action VARCHAR(40) NOT NULL,
+  operation_id CHAR(32) NULL,
   created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  INDEX idx_th_operation(operation_id),
   CONSTRAINT fk_th_translation FOREIGN KEY(translation_id) REFERENCES translations(id) ON DELETE CASCADE,
   CONSTRAINT fk_th_user FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE RESTRICT
 ) ENGINE=InnoDB;

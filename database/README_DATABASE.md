@@ -75,7 +75,7 @@ File 02 không xóa các dòng dữ liệu hiện có và có thể chạy lại
 | `source_changes` | Khóa mới, đổi, xóa, khôi phục; giá trị trước/sau khi nhập nguồn. | Thống kê và chi tiết thay đổi giữa các phiên bản nguồn. |
 | `translations` | Bản dịch theo khóa/ngôn ngữ, trạng thái, người được giao, người sửa, `row_version`. | Soạn thảo, lưu nháp, gửi duyệt, phân công, lọc và phát hiện xung đột. |
 | `translation_comments` | Nội dung bình luận, tác giả và thời điểm trên một bản dịch. | Bình luận/thảo luận. |
-| `translation_history` | Hoạt động dịch/phân công/đánh giá, người thao tác, giá trị trước/sau. | Lịch sử từng bản dịch và lịch sử tổng hợp dự án. |
+| `translation_history` | Hoạt động dịch/phân công/đánh giá, người thao tác, giá trị trước/sau; `operation_id` nhóm các dòng được tạo bởi cùng một thao tác hàng loạt. | Lịch sử từng bản dịch giữ chi tiết theo khóa; lịch sử dự án hiển thị một mục cho thao tác hàng loạt. |
 | `reviews` | Quyết định duyệt/từ chối, Reviewer, ghi chú và thời điểm. | Trang Đánh giá, lý do từ chối, nhận xét đánh giá gần nhất. |
 | `releases` | Phiên bản phát hành, nguồn được dùng, ghi chú, người/ngày phát hành, số khóa. | Tạo và liệt kê bản phát hành. |
 | `release_files` | Nội dung JSON đã chốt cho mỗi ngôn ngữ, tên file, SHA-256, số khóa. | Tải JSON/ZIP; giữ nội dung bản phát hành cũ khi bản dịch thay đổi. |
@@ -97,4 +97,5 @@ File 02 không xóa các dòng dữ liệu hiện có và có thể chạy lại
 - Khi phát hành, nội dung được chốt vào `release_files`; gói ZIP được Backend tạo từ các nội dung này. File SQL chứa đủ nội dung JSON của release demo.
 - Nâng CSDL đang dùng bằng `migrations/006_release_read_api.sql` để thêm API key khách hàng. Key chỉ đọc JSON của một release; tạo key mới sẽ thu hồi key cũ của release đó.
 - Kho dùng chung chỉ đề xuất nội dung đã gửi (`translated`) hoặc đã duyệt (`approved`); bản nháp không xuất hiện. Cài mới có bảng trong `schema.sql`; CSDL đang dùng nâng cấp bằng `migrations/005_translation_memory.sql`.
+- Để gộp lịch sử dự án cho thao tác phân công, nhập hoặc duyệt hàng loạt, CSDL đang dùng cần chạy `migrations/007_history_operation_groups.sql`. CSDL tạo mới đã có cột `translation_history.operation_id` trong `schema.sql`.
 - Bộ dữ liệu mẫu phổ thông bổ sung 1.000 cặp tiếng Việt cho mỗi ngôn ngữ `de`, `es`, `fr`, `ja`, `ko`, `pt`, `ru`, `th` nằm trong `seeds/translation_memory_common_web.sql`. Tiếng Anh và tiếng Trung đã có ít nhất 1.000 cặp trong dữ liệu hiện tại. Nguồn cụm từ giao diện tham khảo là bộ MIT `deviro/common-ui-translations`; xem chú thích đầu file seed và chạy lại script tạo seed nếu cần.

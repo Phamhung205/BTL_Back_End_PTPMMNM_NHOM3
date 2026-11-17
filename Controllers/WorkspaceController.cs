@@ -36,17 +36,28 @@ public sealed class WorkspaceController(Db db, ProjectAccessService access) : Co
         if (page is < 1 or > 999999) throw ApiException.BadRequest("Trang không hợp lệ.");
         await using var cn = await db.OpenAsync(ct);
         await using var cmd = cn.CreateCommand();
-        cmd.CommandText = @"SELECT a.*,u.display_name FROM (
- SELECT h.id,'translation' kind,h.action,ss.key_path label,t.locale_code,h.old_value,h.new_value,h.user_id,h.created_at,t.id translation_id
+        cmd.CommandText = @"SELECT g.id,g.kind,g.action,
+CASE WHEN g.event_count>1 THEN CONCAT(g.event_count,' bản dịch') ELSE g.label END label,
+g.locale_code,IF(g.event_count>1,NULL,g.old_value),IF(g.event_count>1,NULL,g.new_value),
+g.user_id,g.created_at,IF(g.event_count>1,NULL,g.translation_id),u.display_name
+FROM (
+ SELECT MAX(a.id) id,a.kind,a.action,MAX(a.label) label,a.locale_code,MAX(a.old_value) old_value,MAX(a.new_value) new_value,
+ a.user_id,MAX(a.created_at) created_at,MAX(a.translation_id) translation_id,COUNT(*) event_count
+ FROM (
+ SELECT h.id,'translation' kind,h.action,ss.key_path label,t.locale_code,h.old_value,h.new_value,h.user_id,h.created_at,t.id translation_id,h.operation_id
  FROM translation_history h JOIN translations t ON t.id=h.translation_id JOIN source_strings ss ON ss.id=t.string_id WHERE ss.project_id=@project
  UNION ALL
- SELECT c.id,'comment','commented',ss.key_path,t.locale_code,NULL,c.body,c.user_id,c.created_at,t.id
+ SELECT c.id,'comment','commented',ss.key_path,t.locale_code,NULL,c.body,c.user_id,c.created_at,t.id,NULL
  FROM translation_comments c JOIN translations t ON t.id=c.translation_id JOIN source_strings ss ON ss.id=t.string_id WHERE ss.project_id=@project
  UNION ALL
- SELECT sv.id,'source','source_imported',sv.version_name,NULL,NULL,NULL,sv.imported_by,sv.imported_at,NULL FROM source_versions sv WHERE sv.project_id=@project
+ SELECT sv.id,'source','source_imported',sv.version_name,NULL,NULL,NULL,sv.imported_by,sv.imported_at,NULL,NULL FROM source_versions sv WHERE sv.project_id=@project
  UNION ALL
- SELECT r.id,'release','published',r.version_name,NULL,NULL,r.note,r.published_by,r.published_at,NULL FROM releases r WHERE r.project_id=@project
- ) a JOIN users u ON u.id=a.user_id ORDER BY a.created_at DESC,a.kind DESC,a.id DESC LIMIT 51 OFFSET @offset";
+ SELECT r.id,'release','published',r.version_name,NULL,NULL,r.note,r.published_by,r.published_at,NULL,NULL FROM releases r WHERE r.project_id=@project
+ ) a
+ GROUP BY a.kind,a.action,a.user_id,a.locale_code,COALESCE(a.operation_id,CONCAT('event:',a.id))
+ ORDER BY MAX(a.created_at) DESC,a.kind DESC,MAX(a.id) DESC LIMIT 51 OFFSET @offset
+) g JOIN users u ON u.id=g.user_id
+ORDER BY g.created_at DESC,g.kind DESC,g.id DESC";
         cmd.Parameters.AddWithValue("@project", projectId);
         cmd.Parameters.AddWithValue("@offset", (page - 1) * 50);
         var items = new List<object>();

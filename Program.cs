@@ -139,5 +139,23 @@ app.MapGet("/health", async (Db db) =>
     return Results.Ok(new { status = "OK", database = "CONNECTED" });
 });
 
+// --- BỔ SUNG ĐOẠN NÀY ĐỂ TỰ ĐỘNG KHỞI TẠO BẢNG CSDL KHI DEPLOY TRÊN CLOUD ---
+using (var scope = app.Services.CreateScope())
+{
+    try
+    {
+        var adminService = scope.ServiceProvider.GetRequiredService<AdminService>();
+        // Cho phép chạy tự động khởi tạo schema/admin an toàn trên Railway trỏ tới InfinityFree
+        await adminService.BootstrapAsync(builder.Configuration, allowAdditional: true);
+        Console.WriteLine("Database schema and bootstrap checked/initialized successfully.");
+    }
+    catch (Exception ex)
+    {
+        var logger = app.Services.GetRequiredService<ILogger<Program>>();
+        logger.LogError(ex, "Đã xảy ra lỗi khi tự động khởi tạo cơ sở dữ liệu.");
+    }
+}
+// --------------------------------------------------------------------------
+
 app.MapControllers();
 app.Run();

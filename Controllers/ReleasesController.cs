@@ -78,7 +78,17 @@ public sealed class ReleasesController(ProjectAccessService access, ReleaseServi
     public async Task<IActionResult> DownloadIntegration(long projectId,long releaseId,CancellationToken ct)
     {
         await access.GetRoleAsync(projectId,User.UserId(),ct);
-        var package=await releases.IntegrationZipAsync(projectId,releaseId,ct);
+        var package=await releases.IntegrationZipAsync(projectId,releaseId,"PASTE_API_KEY_HERE",ct);
+        return File(package.Content,"application/zip",package.FileName);
+    }
+
+    /// <summary>Rotate the release key and download a ready-to-use customer integration package.</summary>
+    [HttpPost("{releaseId:long}/integration-package")]
+    public async Task<IActionResult> CreateIntegrationPackage(long projectId,long releaseId,CancellationToken ct)
+    {
+        var managerId=User.UserId();
+        await access.RequireManagerAsync(projectId,managerId,ct);
+        var package=await releases.CreateIntegrationPackageAsync(projectId,releaseId,managerId,ct);
         return File(package.Content,"application/zip",package.FileName);
     }
 

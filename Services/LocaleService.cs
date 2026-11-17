@@ -32,6 +32,17 @@ WHERE pl.project_id=@project ORDER BY pl.is_source DESC,l.code";
         return [.. list];
     }
 
+    public async Task<object[]> CatalogAsync(CancellationToken ct = default)
+    {
+        var list = new List<object>();
+        await using var cn = await db.OpenAsync(ct);
+        await using var cmd = cn.CreateCommand();
+        cmd.CommandText = "SELECT code,name FROM locales ORDER BY name,code";
+        await using var rd = await cmd.ExecuteReaderAsync(ct);
+        while (await rd.ReadAsync(ct)) list.Add(new { code = rd.GetString(0), name = rd.GetString(1) });
+        return [.. list];
+    }
+
     public async Task AttachAsync(long projectId, string? localeCode, CancellationToken ct = default)
     {
         var code = NormalizeCode(localeCode);

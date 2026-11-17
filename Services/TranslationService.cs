@@ -266,6 +266,7 @@ WHERE id=@id AND row_version=@expected";
         {
             await using var cn = await db.OpenAsync(ct);
             await using var tx = await cn.BeginTransactionAsync(ct);
+            var operationId = Guid.NewGuid().ToString("N");
             var locale = await RequireTargetLocaleAsync(cn, tx, projectId, request.LocaleCode, ct);
             var assigneeName = request.UserId is null ? null : await RequireAssigneeAsync(cn, tx, projectId, request.UserId.Value, ct);
 
@@ -305,13 +306,13 @@ VALUES(@string,@locale,NULL,'draft',@assignee,1,@manager); SELECT LAST_INSERT_ID
                         cmd.Parameters.AddWithValue("@manager", managerId);
                         newId = Convert.ToInt64(await cmd.ExecuteScalarAsync(ct));
                     }
-                    await AddHistoryAsync(cn, tx, newId, managerId, "assigned", null, assigneeName, ct);
+                    await AddHistoryAsync(cn, tx, newId, managerId, "assigned", null, assigneeName, ct, operationId);
                     changed++;
                 }
                 else if (row.AssignedTo != request.UserId)
                 {
                     await SetAssigneeAsync(cn, tx, row.Id, request.UserId, ct);
-                    await AddHistoryAsync(cn, tx, row.Id, managerId, "assigned", row.AssignedToName, assigneeName, ct);
+                    await AddHistoryAsync(cn, tx, row.Id, managerId, "assigned", row.AssignedToName, assigneeName, ct, operationId);
                     changed++;
                 }
             }
@@ -332,6 +333,7 @@ VALUES(@string,@locale,NULL,'draft',@assignee,1,@manager); SELECT LAST_INSERT_ID
         await using var cn = await db.OpenAsync(ct);
         await using var tx = await cn.BeginTransactionAsync(ct);
         await LockManagerMutationAsync(cn, tx, projectId, managerId, ct);
+        var operationId = Guid.NewGuid().ToString("N");
         var locale = await RequireTargetLocaleAsync(cn, tx, projectId, localeCode, ct);
         var missing = new List<long>();
         var total = 0;
@@ -361,10 +363,11 @@ WHERE ss.project_id=@project AND ss.status='active' ORDER BY ss.id FOR UPDATE";
 
             await using var history = cn.CreateCommand();
             history.Transaction = tx;
-            history.CommandText = $@"INSERT INTO translation_history(translation_id,user_id,old_value,new_value,action)
-SELECT id,@manager,NULL,NULL,'created' FROM translations WHERE locale_code=@locale AND string_id IN ({string.Join(',', names)})";
+            history.CommandText = $@"INSERT INTO translation_history(translation_id,user_id,old_value,new_value,action,operation_id)
+SELECT id,@manager,NULL,NULL,'created',@operation FROM translations WHERE locale_code=@locale AND string_id IN ({string.Join(',', names)})";
             history.Parameters.AddWithValue("@locale", locale);
             history.Parameters.AddWithValue("@manager", managerId);
+            history.Parameters.AddWithValue("@operation", operationId);
             for (var i = 0; i < chunk.Length; i++) history.Parameters.AddWithValue(names[i], chunk[i]);
             await history.ExecuteNonQueryAsync(ct);
         }
@@ -424,6 +427,7 @@ WHERE ss.project_id=@project AND ss.status='active' AND t.locale_code=@locale FO
             List<string> kept = [], notInSource = [], empty = [], tooLong = [];
             var placeholderIssues = new List<object>();
             var touched = new List<long>();
+            var operationId = Guid.NewGuid().ToString("N");
             foreach (var (key, value) in entries.OrderBy(entry => entry.Key, StringComparer.Ordinal))
             {
                 if (!sources.TryGetValue(key, out var source)) { notInSource.Add(key); continue; }
@@ -480,7 +484,7 @@ WHERE id=@id AND row_version=@expected";
                     updated++;
                 }
                 if (!check.Ok) savedDraft++;
-                await AddHistoryAsync(cn, tx, translationId, managerId, "imported", oldValue, value, ct);
+                await AddHistoryAsync(cn, tx, translationId, managerId, "imported", oldValue, value, ct, operationId);
                 touched.Add(source.Id);
             }
 
@@ -699,6 +703,7 @@ WHERE h.translation_id=@id ORDER BY h.id DESC LIMIT 100";
 
         await using var cn = await db.OpenAsync(ct);
         await using var tx = await cn.BeginTransactionAsync(ct);
+        var operationId = Guid.NewGuid().ToString("N");
         var results = new List<object>(items.Length);
         foreach (var item in items.OrderBy(item => item.TranslationId))
         {
@@ -729,7 +734,7 @@ WHERE h.translation_id=@id ORDER BY h.id DESC LIMIT 100";
                 cmd.Parameters.AddWithValue("@user", reviewerId);
                 await cmd.ExecuteNonQueryAsync(ct);
             }
-            await AddHistoryAsync(cn, tx, row.Id, reviewerId, "approved", null, null, ct);
+            await AddHistoryAsync(cn, tx, row.Id, reviewerId, "approved", null, null, ct, operationId);
             results.Add(new { translationId = row.Id, status = TranslationStatus.Approved, rowVersion = row.RowVersion + 1 });
         }
 
@@ -828,16 +833,17 @@ FOR UPDATE";
         await cmd.ExecuteNonQueryAsync(ct);
     }
 
-    private static async Task AddHistoryAsync(MySqlConnection cn, MySqlTransaction tx, long translationId, long userId, string action, string? oldValue, string? newValue, CancellationToken ct)
+    private static async Task AddHistoryAsync(MySqlConnection cn, MySqlTransaction tx, long translationId, long userId, string action, string? oldValue, string? newValue, CancellationToken ct, string? operationId = null)
     {
         await using var cmd = cn.CreateCommand();
         cmd.Transaction = tx;
-        cmd.CommandText = "INSERT INTO translation_history(translation_id,user_id,old_value,new_value,action) VALUES(@id,@user,@old,@new,@action)";
+        cmd.CommandText = "INSERT INTO translation_history(translation_id,user_id,old_value,new_value,action,operation_id) VALUES(@id,@user,@old,@new,@action,@operation)";
         cmd.Parameters.AddWithValue("@id", translationId);
         cmd.Parameters.AddWithValue("@user", userId);
         cmd.Parameters.AddWithValue("@old", (object?)oldValue ?? DBNull.Value);
         cmd.Parameters.AddWithValue("@new", (object?)newValue ?? DBNull.Value);
         cmd.Parameters.AddWithValue("@action", action);
+        cmd.Parameters.AddWithValue("@operation", (object?)operationId ?? DBNull.Value);
         await cmd.ExecuteNonQueryAsync(ct);
     }
 

@@ -260,6 +260,24 @@ WHERE r.id=@release AND r.project_id=@project AND rf.locale_code=@locale";
     /// <summary>Rotate the read-only key for one release. The raw value is returned only once.</summary>
     public async Task<string> RotateApiKeyAsync(long projectId, long releaseId, long managerId, CancellationToken ct = default)
     {
+        var apiKey = GenerateApiKey();
+        await StoreApiKeyAsync(projectId, releaseId, managerId, apiKey, ct);
+        return apiKey;
+    }
+
+    public async Task<(string FileName, byte[] Content)> CreateIntegrationPackageAsync(long projectId, long releaseId, long managerId, CancellationToken ct = default)
+    {
+        // Build the package before rotating the stored key so a ZIP-generation error cannot invalidate the customer's current key.
+        var apiKey = GenerateApiKey();
+        var package = await IntegrationZipAsync(projectId, releaseId, apiKey, ct);
+        await StoreApiKeyAsync(projectId, releaseId, managerId, apiKey, ct);
+        return package;
+    }
+
+    private static string GenerateApiKey() => "tmr_read_" + Convert.ToBase64String(RandomNumberGenerator.GetBytes(32)).TrimEnd('=').Replace('+', '-').Replace('/', '_');
+
+    private async Task StoreApiKeyAsync(long projectId, long releaseId, long managerId, string apiKey, CancellationToken ct)
+    {
         await using var cn = await db.OpenAsync(ct);
         await using (var exists = cn.CreateCommand())
         {
@@ -269,7 +287,6 @@ WHERE r.id=@release AND r.project_id=@project AND rf.locale_code=@locale";
             if (await exists.ExecuteScalarAsync(ct) is null) throw ApiException.NotFound("Không tìm thấy bản phát hành.");
         }
 
-        var apiKey = "tmr_read_" + Convert.ToBase64String(RandomNumberGenerator.GetBytes(32)).TrimEnd('=').Replace('+', '-').Replace('/', '_');
         var keyHash = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(apiKey))).ToLowerInvariant();
         var keyPrefix = apiKey[..Math.Min(apiKey.Length, 18)];
         await using var cmd = cn.CreateCommand();
@@ -281,7 +298,6 @@ ON DUPLICATE KEY UPDATE key_hash=VALUES(key_hash),key_prefix=VALUES(key_prefix),
         cmd.Parameters.AddWithValue("@prefix", keyPrefix);
         cmd.Parameters.AddWithValue("@user", managerId);
         await cmd.ExecuteNonQueryAsync(ct);
-        return apiKey;
     }
 
     /// <summary>Read a public immutable locale file after validating its release-scoped API key.</summary>
@@ -363,11 +379,12 @@ ON DUPLICATE KEY UPDATE key_hash=VALUES(key_hash),key_prefix=VALUES(key_prefix),
     }
 
     /// <summary>Gói snapshot JSON cùng client để website khách hàng tự áp dụng data-i18n.</summary>
-    public async Task<(string FileName, byte[] Content)> IntegrationZipAsync(long projectId, long releaseId, CancellationToken ct = default)
+    public async Task<(string FileName, byte[] Content)> IntegrationZipAsync(long projectId, long releaseId, string apiKey, CancellationToken ct = default)
     {
         var release = await GetAsync(projectId, releaseId, ct);
         var locales = release.Files.Select(file => file.LocaleCode).Distinct(StringComparer.OrdinalIgnoreCase).Order(StringComparer.OrdinalIgnoreCase).ToArray();
         if (locales.Length == 0) throw ApiException.NotFound("Bản phát hành không có file ngôn ngữ.");
+        if (string.IsNullOrWhiteSpace(apiKey) || apiKey.Length > 128) throw ApiException.BadRequest("API key tích hợp không hợp lệ.");
 
         await using var cn = await db.OpenAsync(ct);
         string slug;
@@ -385,16 +402,17 @@ ON DUPLICATE KEY UPDATE key_hash=VALUES(key_hash),key_prefix=VALUES(key_prefix),
             await using (var entry = zip.CreateEntry("translation-manager.js", CompressionLevel.Optimal).Open())
                 await entry.WriteAsync(Encoding.UTF8.GetBytes(client), ct);
 
-            var config = $$"""
-// Nhận API key từ Manager trên trang Phát hành rồi điền vào apiKey bên dưới.
-window.TRANSLATION_MANAGER_CONFIG = {
-  apiBaseUrl: 'http://127.0.0.1:5088',
-  releaseId: {{releaseId}},
-  apiKey: 'PASTE_API_KEY_HERE',
-  selector: '[data-translation-language]',
-  defaultLocale: 'vi'
-};
-""";
+            var apiBaseUrl = (configuration["PublicApiBaseUrl"] ?? "http://127.0.0.1:5088").Trim().TrimEnd('/');
+            if (!Uri.TryCreate(apiBaseUrl, UriKind.Absolute, out var publicApiUri) || publicApiUri.Scheme is not ("http" or "https"))
+                throw new InvalidOperationException("PublicApiBaseUrl phải là địa chỉ HTTP hoặc HTTPS tuyệt đối.");
+            var config = "window.TRANSLATION_MANAGER_CONFIG = " + JsonSerializer.Serialize(new
+            {
+                apiBaseUrl,
+                releaseId,
+                apiKey,
+                selector = "[data-translation-language]",
+                defaultLocale = release.Files.FirstOrDefault(file => file.IsSource)?.LocaleCode ?? locales[0]
+            }, ManifestOptions) + ";\n";
             await using (var entry = zip.CreateEntry("translation-manager.config.js", CompressionLevel.Optimal).Open())
                 await entry.WriteAsync(Encoding.UTF8.GetBytes(config), ct);
 
@@ -403,15 +421,20 @@ Translation Manager - API tich hop website
 Du an: __PROJECT__
 Phien ban: __VERSION__
 
-1. Khi Manager phat hanh, web chinh tu tao API key rieng cho release va hien config da dien. Key chi doc cac file cua snapshot nay.
-2. Giai nen ZIP nay vao website. Mo translation-manager.config.js va thay PASTE_API_KEY_HERE bang key vua tao. Neu API da deploy, doi apiBaseUrl sang dia chi Backend.
+1. Giai nen ZIP nay vao website. __KEY_INSTRUCTION__
+2. Gói lấy PublicApiBaseUrl từ cấu hình Backend. Trước khi gửi khách, đặt giá trị này thành địa chỉ Backend mà trình duyệt khách có thể truy cập; localhost chỉ dùng được khi khách chạy cùng máy.
 3. Gan data-i18n vao phan tu HTML bang key co trong JSON, vi du: <h1 data-i18n="home.title">Tieu de</h1>. Neu co bien {name}, truyen gia tri bang data-i18n-vars='{"name":"Lan"}'.
 4. Them bo chon ngon ngu: <select data-translation-language><option value="vi">Tieng Viet</option><option value="en">English</option></select>.
 5. Gan ca hai script theo thu tu: translation-manager.config.js, sau do translation-manager.js. Goi TranslationManager.init() sau khi trang da co bo chon ngon ngu.
-6. Doi gia tri select de client doc ban dich tu API va ap dung cac khoa da gan. Khoa khong co ban dich giu nguyen noi dung goc.
+6. Khi nguoi dung doi ngon ngu, client goi API bang key trong header X-API-Key, tai file JSON dung release va ap dung cac khoa da gan. Khoa khong co ban dich giu nguyen noi dung goc.
 
-API key chi doc JSON da phat hanh cua release nay; khong the sua ban dich, doc du an khac hoac truy cap tai khoan. Tao key moi se vo hieu hoa key cu.
-""".Replace("__PROJECT__", slug, StringComparison.Ordinal).Replace("__VERSION__", release.Version, StringComparison.Ordinal).TrimStart();
+API key chi doc JSON da phat hanh cua release nay; khong the sua ban dich, doc du an khac hoac truy cap tai khoan. Tao goi moi se vo hieu hoa key cu.
+""".Replace("__PROJECT__", slug, StringComparison.Ordinal)
+                .Replace("__VERSION__", release.Version, StringComparison.Ordinal)
+                .Replace("__KEY_INSTRUCTION__", apiKey == "PASTE_API_KEY_HERE"
+                    ? "Mo translation-manager.config.js va thay PASTE_API_KEY_HERE bang API key do Manager cap."
+                    : "API key da duoc gan san trong translation-manager.config.js.", StringComparison.Ordinal)
+                .TrimStart();
             await using (var entry = zip.CreateEntry("README-import.txt", CompressionLevel.Optimal).Open())
                 await entry.WriteAsync(Encoding.UTF8.GetBytes(readme), ct);
         }
