@@ -5,6 +5,7 @@ using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.IdentityModel.Tokens;
 using TranslationManager.Api.Data;
 using TranslationManager.Api.Services;
+using TranslationManager.Api.Services.Sms;
 using TranslationManager.Api.Support;
 
 var builder = WebApplication.CreateBuilder(args);
@@ -24,6 +25,15 @@ builder.Services.AddScoped<ReleaseService>();
 builder.Services.AddScoped<AdminService>();
 builder.Services.AddScoped<AccessService>();
 builder.Services.AddScoped<TranslationMemoryService>();
+
+// Đăng nhập Google/Facebook và quên mật khẩu bằng OTP.
+builder.Services.AddHttpClient();
+builder.Services.AddScoped<SocialAuthService>();
+builder.Services.AddScoped<PasswordResetService>();
+builder.Services.AddScoped<AuthSchemaUpgrader>();
+// Chưa có API SMS: LogSmsSender chỉ ghi tin nhắn OTP ra log server.
+// Khi có nhà cung cấp SMS, thay dòng dưới bằng lớp gửi SMS thật (xem Sms/ISmsSender.cs).
+builder.Services.AddSingleton<ISmsSender, LogSmsSender>();
 
 var jwtKey = builder.Configuration["Jwt:Key"];
 if (string.IsNullOrWhiteSpace(jwtKey) && builder.Environment.IsDevelopment())
@@ -147,6 +157,16 @@ using (var scope = app.Services.CreateScope())
 {
     try
     {
+        // Thêm cột phone/google_id/facebook_id và bảng password_reset_otps nếu chưa có.
+        await scope.ServiceProvider.GetRequiredService<AuthSchemaUpgrader>().EnsureAsync();
+    }
+    catch (Exception ex)
+    {
+        app.Services.GetRequiredService<ILogger<Program>>().LogError(ex, "Không nâng cấp được schema đăng nhập mạng xã hội / OTP.");
+    }
+
+    try
+    {
         var adminService = scope.ServiceProvider.GetRequiredService<AdminService>();
         // Cho phép chạy tự động khởi tạo schema/admin an toàn trên Railway trỏ tới InfinityFree
         await adminService.BootstrapAsync(builder.Configuration, allowAdditional: true);
@@ -162,4 +182,3 @@ using (var scope = app.Services.CreateScope())
 
 app.MapControllers();
 app.Run();
-// bản này add lại để chạy 
