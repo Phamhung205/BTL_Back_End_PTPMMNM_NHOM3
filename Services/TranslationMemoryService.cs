@@ -1,4 +1,8 @@
 using MySqlConnector;
+using System;
+using System.Collections.Generic;
+using System.Threading;
+using System.Threading.Tasks;
 using TranslationManager.Api.Data;
 using TranslationManager.Api.Support;
 
@@ -79,6 +83,60 @@ GROUP BY l.code,l.name ORDER BY l.name,l.code";
             while (await rd.ReadAsync(ct)) items.Add(new { id = rd.GetInt64(0), sourceLocaleCode = "vi", sourceText = rd.GetString(1), targetLocaleCode = rd.GetString(2), targetText = rd.GetString(3) });
         }
         return new { items, total, page, pageSize = 50, hasMore = page * 50L < total };
+    }
+
+    /// <summary>
+    /// Gợi ý bản dịch cho một câu khi đang dịch, theo đúng ngôn ngữ đích.
+    /// - Đích khác tiếng Việt: tra câu tiếng Việt (text) → trả bản dịch ở ngôn ngữ đích (vd. "Trang chủ" → "Home").
+    /// - Đích là tiếng Việt: tra câu ở ngôn ngữ nguồn (text, ngôn ngữ fromLocale) → trả câu tiếng Việt tương ứng.
+    /// Khớp hoàn toàn xếp trước, sau đó tới các câu có chứa đoạn văn bản; tối đa 10 kết quả.
+    /// </summary>
+    public async Task<object> SuggestAsync(string? targetLocaleCode, string? text, string? fromLocaleCode, CancellationToken ct)
+    {
+        var target = LocaleService.NormalizeCode(targetLocaleCode);
+        var value = (text ?? "").Trim();
+        if (value.Length > 2000) throw ApiException.BadRequest("Nội dung tra cứu tối đa 2000 ký tự.");
+        if (value.Length == 0) return new { items = Array.Empty<object>() };
+
+        // Đích ≠ vi: so khớp câu tiếng Việt (source), gợi ý bản dịch đích (target).
+        // Đích = vi: so khớp câu ở ngôn ngữ nguồn (target của kho), gợi ý câu tiếng Việt (source của kho).
+        string memoryLocale, matchColumn, matchHash, suggestionColumn;
+        if (target != "vi")
+        {
+            memoryLocale = target; matchColumn = "m.source_text"; matchHash = "m.source_hash"; suggestionColumn = "m.target_text";
+        }
+        else
+        {
+            var from = LocaleService.NormalizeCode(fromLocaleCode);
+            if (from == "vi") throw ApiException.BadRequest("Ngôn ngữ nguồn và ngôn ngữ đích không được trùng nhau.");
+            memoryLocale = from; matchColumn = "m.target_text"; matchHash = "m.target_hash"; suggestionColumn = "m.source_text";
+        }
+
+        // Câu dài chỉ so khớp hoàn toàn; câu ngắn so khớp thêm "có chứa".
+        var like = value.Length <= 200 ? "%" + value.Replace("\\", "\\\\").Replace("%", "\\%").Replace("_", "\\_") + "%" : "";
+        var sql = $@"SELECT m.id, {matchColumn}, {suggestionColumn}, ({matchHash} = SHA2(@text,256)) AS exact_match
+FROM translation_memory m
+WHERE m.source_locale_code='vi' AND m.target_locale_code=@locale
+  AND ({matchHash} = SHA2(@text,256) OR (@like<>'' AND {matchColumn} LIKE @like))
+ORDER BY exact_match DESC, CHAR_LENGTH({matchColumn}), m.id
+LIMIT 10";
+
+        var items = new List<object>();
+        await using var cn = await db.OpenAsync(ct);
+        await using var cmd = new MySqlCommand(sql, cn);
+        cmd.Parameters.AddWithValue("@locale", memoryLocale);
+        cmd.Parameters.AddWithValue("@text", value);
+        cmd.Parameters.AddWithValue("@like", like);
+        await using var rd = await cmd.ExecuteReaderAsync(ct);
+        while (await rd.ReadAsync(ct))
+            items.Add(new
+            {
+                id = rd.GetInt64(0),
+                matchedText = rd.GetString(1),
+                suggestion = rd.GetString(2),
+                exact = Convert.ToInt64(rd.GetValue(3)) != 0
+            });
+        return new { items };
     }
 
     private static string Search(string? value)
