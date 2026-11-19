@@ -308,3 +308,21 @@ Kiểm thử hồi quy: tests/api/duc-import-security.test.mjs (6 nhóm). Hướ
 Client trong gói tích hợp có `TranslationManager.t(key, variables)` để lấy chuỗi theo ngôn ngữ đang dùng, và `TranslationManager.apply()` để áp dụng lại bản dịch sau khi tạo phần tử động. Các thuộc tính hỗ trợ: `data-i18n`, `data-i18n-placeholder`, `data-i18n-title`, `data-i18n-document-title`, `data-i18n-alt`, `data-i18n-aria-label`; biến truyền qua `data-i18n-vars`.
 
 Dùng `textContent` cho chuỗi trả về, tránh ghép nội dung vào HTML. Sự kiện `translationmanager:language-changed` cho phép cập nhật biến đã dịch (tên sản phẩm, độ mạnh mật khẩu). Danh sách ngôn ngữ lấy từ các file thật trong release. Cần tải lại client khi nâng cấp website mẫu cũ.
+
+## Giấy phép và nguồn sử dụng
+
+Mã nguồn của nhóm phát hành theo **giấy phép MIT**, xem tệp [LICENSE](LICENSE). Bản quyền © 2026 Nhóm 3: Phạm Ngọc Hùng, Bùi Đình Mạnh, Phạm Thế Đức.
+
+Mã nhóm tự viết: `Controllers/`, `Services/`, `Support/`, `Dtos/`, `Models/`, `Data/`, `database/`, `tests/api/`, `Program.cs`. Các thư viện và dịch vụ bên ngoài được sử dụng lại:
+
+| Thành phần | Phiên bản | Vai trò | Giấy phép / điều khoản | Nguồn |
+| --- | --- | --- | --- | --- |
+| .NET / ASP.NET Core | 10.0 | Nền tảng Web API | MIT | https://github.com/dotnet/aspnetcore |
+| Microsoft.AspNetCore.Authentication.JwtBearer | 10.0.0 | Xác thực JWT | MIT | https://www.nuget.org/packages/Microsoft.AspNetCore.Authentication.JwtBearer |
+| MySqlConnector | 2.3.7 | Kết nối MySQL/MariaDB | MIT | https://mysqlconnector.net |
+| MySQL / MariaDB (XAMPP) | — | Hệ quản trị CSDL, cài riêng, không kèm trong mã | GPL v2 | https://mariadb.org |
+| Node.js (chỉ để chạy `tests/api`) | 18+ | Chạy kiểm thử API, chỉ dùng mô-đun có sẵn | MIT | https://nodejs.org |
+| Google Sign-In (OpenID Connect) | — | Đăng nhập Google, tùy chọn | Điều khoản dịch vụ Google | https://developers.google.com/identity |
+| DeepL API | — | Gợi ý dịch, tùy chọn, cần khóa riêng cấu hình trên server | Điều khoản dịch vụ DeepL | https://www.deepl.com/pro-api |
+
+Dữ liệu mẫu (`database/seed.sql`, `database/seeds/`) do nhóm biên soạn, chỉ gồm tài khoản và nội dung giả. Không có khóa API, mật khẩu hoặc dữ liệu thật trong kho mã.

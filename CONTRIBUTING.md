@@ -8,4 +8,8 @@
 6. Mở pull request với mô tả thay đổi, test đã chạy, ảnh giao diện nếu có và issue liên quan. Nhờ thành viên khác review trước khi hợp nhất.
 7. Không commit `.local`, `.env.local`, tệp khóa, mật khẩu, CSDL đang chạy hoặc bin/obj. Chỉ đưa cấu hình mẫu và JSON giả có nguồn rõ ràng.
 
-Trước khi nộp: điền bảng ba thành viên trong README, thống nhất LICENSE, kiểm tra nguồn/thư viện tái sử dụng, cấp quyền đọc cho giảng viên, tạo release từ commit cuối và thử cài lại gói ZIP trên môi trường sạch.
+Trước khi nộp: điền bảng ba thành viên trong README, kiểm tra nguồn/thư viện tái sử dụng (mục "Giấy phép và nguồn sử dụng" trong README), cấp quyền đọc cho giảng viên, tạo release từ commit cuối và thử cài lại gói ZIP trên môi trường sạch.
+
+## Giấy phép đóng góp
+
+Dự án phát hành theo giấy phép MIT (xem tệp `LICENSE`). Khi gửi pull request, bạn đồng ý phần đóng góp của mình được phát hành theo cùng giấy phép này. Nếu đưa vào mã, dữ liệu hoặc tài nguyên của bên thứ ba, ghi rõ nguồn và giấy phép của chúng trong README.
